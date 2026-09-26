@@ -1,0 +1,15 @@
+# Runtime configuration and secrets
+/config/local.php
+.env
+
+# Runtime files
+/storage/cache/*
+!/storage/cache/.gitkeep
+/storage/logs/*
+!/storage/logs/.gitkeep
+
+# Editor/OS
+.DS_Store
+.idea/
+.vscode/
+*.log

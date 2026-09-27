@@ -1,0 +1,121 @@
+name: Deploy BanglaVerseWiki
+
+on:
+  push:
+    branches:
+      - arena/01a0dec8-chikipedia
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: banglaversewiki-production
+  cancel-in-progress: false
+
+jobs:
+  validate-and-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    steps:
+      - name: Check out release
+        uses: actions/checkout@v4
+
+      - name: Validate release files
+        run: |
+          set -euo pipefail
+          find . -name '*.php' -not -path './.git/*' -print0 | xargs -0 -n1 php -l
+          python3 -m json.tool manifest.json >/dev/null
+          python3 -m json.tool manifest.webmanifest >/dev/null
+
+      - name: Build private production configuration
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          IMGBB_API_KEY: ${{ secrets.IMGBB_API_KEY }}
+          ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
+          ADMIN_PASSWORD_HASH: ${{ secrets.ADMIN_PASSWORD_HASH }}
+          INDEXNOW_KEY: ${{ secrets.INDEXNOW_KEY }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          required = ['DB_HOST', 'DB_NAME', 'DB_USER', 'DB_PASSWORD', 'IMGBB_API_KEY', 'ADMIN_EMAIL', 'ADMIN_PASSWORD_HASH']
+          missing = [key for key in required if not os.environ.get(key)]
+          if missing:
+              raise SystemExit('Missing production secrets: ' + ', '.join(missing))
+
+          def php_string(value):
+              return "'" + value.replace('\\', '\\\\').replace("'", "\\'") + "'"
+
+          values = {
+              'db_host': os.environ['DB_HOST'],
+              'db_name': os.environ['DB_NAME'],
+              'db_user': os.environ['DB_USER'],
+              'db_pass': os.environ['DB_PASSWORD'],
+              'site_url': 'https://banglaversewiki.unaux.com',
+              'imgbb_api_key': os.environ['IMGBB_API_KEY'],
+              'indexnow_key': os.environ.get('INDEXNOW_KEY', ''),
+              'admin_bootstrap_email': os.environ['ADMIN_EMAIL'],
+              'admin_bootstrap_password_hash': os.environ['ADMIN_PASSWORD_HASH'],
+              'fresh_content_reset': '1',
+          }
+          body = "<?php\n// Generated only inside the protected deployment runner.\nreturn [\n"
+          body += ''.join(f"    {php_string(key)} => {php_string(value)},\n" for key, value in values.items())
+          body += "];\n"
+          Path('config/local.php').write_text(body)
+          PY
+          test -s config/local.php
+
+      - name: Install secure FTP client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq lftp
+
+      - name: Publish to production FTP
+        env:
+          FTP_SERVER: ${{ secrets.FTP_SERVER }}
+          FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
+          FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
+        run: |
+          set -euo pipefail
+          lftp <<LFTP
+          set cmd:fail-exit true
+          set net:max-retries 4
+          set net:timeout 25
+          set net:reconnect-interval-base 4
+          set ftp:passive-mode true
+          set ftp:ssl-force true
+          set ftp:ssl-protect-data true
+          set ssl:verify-certificate no
+          open -u "$FTP_USERNAME","$FTP_PASSWORD" "$FTP_SERVER"
+          mirror --reverse --delete --only-newer --parallel=3 --verbose=1 \
+            --exclude-glob .git/** \
+            --exclude-glob .github/** \
+            --exclude-glob .gitignore \
+            --exclude-glob README.md \
+            --exclude-glob .well-known/** \
+            ./ /htdocs/
+          bye
+          LFTP
+
+      - name: Verify production and run idempotent migrations
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5; do
+            if curl --fail --silent --show-error --max-time 30 \
+              -H 'Cache-Control: no-cache' \
+              "https://banglaversewiki.unaux.com/?release=${GITHUB_SHA}" \
+              | grep -q 'BanglaVerse'; then
+              echo 'Production verification succeeded.'
+              exit 0
+            fi
+            sleep 10
+          done
+          echo 'Production verification failed.' >&2
+          exit 1

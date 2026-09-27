@@ -1,0 +1,105 @@
+Options -Indexes
+DirectoryIndex index.php
+ErrorDocument 404 /404.php
+
+RewriteEngine On
+RewriteBase /
+
+# Block source, secrets, and internal application files.
+RewriteRule ^(?:config|includes|database|scripts|storage)/ - [F,L,NC]
+RewriteRule (^|/)\.(?!well-known/) - [F,L]
+RewriteRule \.(?:sql|log|ini|env|example|md|zip)$ - [F,L,NC]
+
+# Uncomment after confirming SSL works on your host.
+# RewriteCond %{HTTPS} !=on
+# RewriteCond %{HTTP:X-Forwarded-Proto} !https [NC]
+# RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [R=301,L]
+
+# Discovery and indexing endpoints.
+RewriteRule ^sitemap\.xml$ sitemap.php [L,QSA]
+RewriteRule ^sitemap-images\.xml$ sitemap.php?images=1 [L,QSA]
+RewriteRule ^sitemap-images-([0-9]+)\.xml$ sitemap.php?images=1&page=$1 [L,QSA]
+RewriteRule ^sitemap-([0-9]+)\.xml$ sitemap.php?page=$1 [L,QSA]
+RewriteRule ^feed\.xml$ rss.php [L,QSA]
+RewriteRule ^indexnow-key\.txt$ indexnow.php [L]
+
+# Preserve Bearer credentials on CGI/FastCGI shared hosts.
+RewriteCond %{HTTP:Authorization} .
+RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+# JSON APIs.
+RewriteRule ^api/v1/bot/articles/?$ pages/bot_api.php [L,QSA]
+RewriteRule ^api/v1/bot/jobs/([0-9]+)/?$ pages/bot_api.php?job_id=$1 [L,QSA]
+RewriteRule ^api/docs/?$ pages/api_docs.php [L,QSA]
+RewriteRule ^api/search/?$ pages/api.php?action=search [L,QSA]
+RewriteRule ^api/preview/?$ pages/api.php?action=preview [L,QSA]
+RewriteRule ^api/autosave/?$ pages/api.php?action=autosave [L,QSA]
+RewriteRule ^api/import-article/?$ pages/api.php?action=import-article [L,QSA]
+RewriteRule ^api/import-image/?$ pages/api.php?action=import-image [L,QSA]
+RewriteRule ^api/upload-image/?$ pages/upload_image.php [L,QSA]
+
+# Encyclopedia pages.
+RewriteRule ^wiki/([^/]+)/?$ pages/wiki.php?slug=$1 [L,QSA]
+RewriteRule ^edit/([^/]+)/?$ pages/edit.php?slug=$1 [L,QSA]
+RewriteRule ^history/([^/]+)/?$ pages/history.php?slug=$1 [L,QSA]
+RewriteRule ^diff/([^/]+)/?$ pages/diff.php?slug=$1 [L,QSA]
+RewriteRule ^talk/([^/]+)/?$ pages/talk.php?slug=$1 [L,QSA]
+RewriteRule ^report/([^/]+)/?$ pages/report.php?slug=$1 [L,QSA]
+RewriteRule ^category/([^/]+)/?$ pages/category.php?slug=$1 [L,QSA]
+RewriteRule ^categories/?$ pages/categories.php [L,QSA]
+RewriteRule ^special/what-links-here/([^/]+)/?$ pages/what_links.php?slug=$1 [L,QSA]
+RewriteRule ^special/wanted/?$ pages/wanted.php [L,QSA]
+RewriteRule ^special/(recent|popular|random)/?$ pages/special.php?type=$1 [L,QSA]
+RewriteRule ^bots/requests/?$ pages/bots.php?view=list [L,QSA]
+RewriteRule ^bots/request/new/?$ pages/bots.php?view=new [L,QSA]
+RewriteRule ^bots/request/([0-9]+)/?$ pages/bots.php?view=detail&id=$1 [L,QSA]
+RewriteRule ^events/?$ pages/events.php?view=list [L,QSA]
+RewriteRule ^events/create/?$ pages/events.php?view=create [L,QSA]
+RewriteRule ^event/([^/]+)/?$ pages/events.php?view=detail&slug=$1 [L,QSA]
+RewriteRule ^community/?$ pages/community.php [L,QSA]
+RewriteRule ^policies/?$ pages/policies.php [L,QSA]
+RewriteRule ^policy/([^/]+)/?$ pages/policies.php?slug=$1 [L,QSA]
+RewriteRule ^search/?$ pages/search.php [L,QSA]
+RewriteRule ^create/?$ pages/create.php [L,QSA]
+RewriteRule ^article-action/?$ pages/article_action.php [L,QSA]
+
+# Accounts and administration.
+RewriteRule ^user/([^/]+)/?$ pages/profile.php?username=$1 [L,QSA]
+RewriteRule ^drafts/?$ pages/drafts.php [L,QSA]
+RewriteRule ^account/?$ pages/account.php [L,QSA]
+RewriteRule ^admin/?$ pages/admin.php [L,QSA]
+RewriteRule ^setup/?$ pages/setup.php [L,QSA]
+RewriteRule ^login/?$ pages/login.php [L,QSA]
+RewriteRule ^register/?$ pages/register.php [L,QSA]
+RewriteRule ^logout/?$ pages/logout.php [L,QSA]
+
+RewriteCond %{REQUEST_FILENAME} -f [OR]
+RewriteCond %{REQUEST_FILENAME} -d
+RewriteRule ^ - [L]
+RewriteRule ^$ index.php [L]
+RewriteRule . 404.php [L]
+
+<IfModule mod_headers.c>
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "SAMEORIGIN"
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+    Header always set Permissions-Policy "camera=(), microphone=(), geolocation=()"
+    Header always set Cross-Origin-Opener-Policy "same-origin"
+    Header always set Content-Security-Policy "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'; object-src 'none'; img-src 'self' data: https:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'"
+    <FilesMatch "\.(?:css|js|png|jpg|jpeg|gif|webp|ico|svg|webmanifest)$">
+        Header set Cache-Control "public, max-age=2592000, immutable"
+    </FilesMatch>
+</IfModule>
+
+<IfModule mod_deflate.c>
+    AddOutputFilterByType DEFLATE text/html text/plain text/css text/javascript application/javascript application/json application/xml image/svg+xml
+</IfModule>
+
+<IfModule mod_expires.c>
+    ExpiresActive On
+    ExpiresByType text/css "access plus 30 days"
+    ExpiresByType application/javascript "access plus 30 days"
+    ExpiresByType image/png "access plus 1 year"
+    ExpiresByType image/webp "access plus 1 year"
+    ExpiresByType image/x-icon "access plus 1 year"
+</IfModule>

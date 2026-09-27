@@ -1,0 +1,21 @@
+User-agent: *
+Allow: /
+Disallow: /admin
+Disallow: /account
+Allow: /api/docs
+Disallow: /api/
+Disallow: /config/
+Disallow: /create
+Disallow: /drafts
+Disallow: /edit/
+Disallow: /history/
+Disallow: /diff/
+Disallow: /login
+Disallow: /logout
+Disallow: /register
+Disallow: /report/
+Disallow: /setup
+Disallow: /talk/
+
+Sitemap: https://banglaversewiki.unaux.com/sitemap.xml
+Sitemap: https://banglaversewiki.unaux.com/sitemap-images.xml

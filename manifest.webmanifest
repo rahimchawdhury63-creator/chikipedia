@@ -1,0 +1,25 @@
+{
+  "name": "BanglaVerseWiki — Free Encyclopedia",
+  "short_name": "BanglaVerse",
+  "description": "A free, community-built encyclopedia for Bengali knowledge.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "lang": "bn-BD",
+  "categories": ["education", "reference"],
+  "icons": [
+    {"src": "/img/brand/logo.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"},
+    {"src": "/img/icon/android-chrome-192x192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
+    {"src": "/img/icon/android-chrome-512x512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}
+  ],
+  "shortcuts": [
+    {"name": "Search", "url": "/search", "icons": [{"src": "/img/icon/android-chrome-192x192.png", "sizes": "192x192"}]},
+    {"name": "Random article", "url": "/special/random", "icons": [{"src": "/img/icon/android-chrome-192x192.png", "sizes": "192x192"}]},
+    {"name": "Recent changes", "url": "/special/recent", "icons": [{"src": "/img/icon/android-chrome-192x192.png", "sizes": "192x192"}]},
+    {"name": "Community events", "url": "/events", "icons": [{"src": "/img/icon/android-chrome-192x192.png", "sizes": "192x192"}]}
+  ]
+}

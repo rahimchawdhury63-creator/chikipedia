@@ -18,7 +18,7 @@ Set this only when legacy encyclopedia content is intentionally being discarded:
 'fresh_content_reset' => '1',
 ```
 
-On the first upgraded request, the app clears article/content, draft, media, moderation, search-event, remote-import, and IndexNow run data while preserving users, roles, settings, and synonyms. It then records `fresh_content_reset_v1`; leaving the configuration value at `1` cannot trigger that version of the reset again.
+On the first upgraded request, the app clears article/content, draft, media, moderation, protection/link/redirect, bot-job, search-event, remote-import, and IndexNow run data while preserving users, roles, settings, synonyms, and registered bot configuration. It then records `fresh_content_reset_v1`; leaving the configuration value at `1` cannot trigger that version of the reset again.
 
 Alternatively, after backing up the database, run `database/fresh-reset.sql` once in phpMyAdmin. Do not combine both methods unnecessarily. For a content-preserving upgrade, leave the option unset or set it to `0`.
 
@@ -29,7 +29,7 @@ Alternatively, after backing up the database, run `database/fresh-reset.sql` onc
 3. Configure the database, exact canonical HTTPS `site_url`, ImgBB key, IndexNow key, and administrator bootstrap hash.
 4. Keep `admin_bootstrap_email` set to `rrc@bsdc.info.bd` for the initial administrator. The app stores the bcrypt hash and never requires the plaintext password in source.
 5. Ensure `config/local.php` is not publicly downloadable. The supplied `.htaccess` blocks it, but host behavior should still be tested.
-6. Open the site once. The bootstrap applies idempotent schema version 7 migrations and, if deliberately enabled, the one-time content reset.
+6. Open the site once. The bootstrap applies idempotent schema version 8 migrations and, if deliberately enabled, the one-time content reset.
 
 If runtime `CREATE`/`ALTER` privileges are unavailable, import `database/schema.sql` for a new database. Existing databases should be upgraded by the runtime migrations rather than importing the full schema over their tables.
 
@@ -37,8 +37,12 @@ If runtime `CREATE`/`ALTER` privileges are unavailable, import `database/schema.
 
 - Open `/health` and verify that database access and required extensions report correctly.
 - Sign in as the administrator and open `/admin`.
-- Verify **System health**, **SEO automation**, **Content imports**, and **Media provenance**.
-- Create and preview a draft, upload a small JPEG/PNG/WebP image, and confirm the returned URL is on `https://i.ibb.co/`.
+- Verify **System health**, **SEO automation**, **Automation bots**, **Content imports**, and **Media provenance**.
+- Open `/community`, `/policies`, and at least one `/policy/{slug}` page.
+- Create a draft, switch between visual/source/split preview modes, and confirm templates and citations remain intact after a round trip.
+- Protect a test article, verify a moderator cannot edit or restore it, then remove protection and inspect the protection audit log.
+- Queue a pending-review test bot job with an HTTPS source, run the queue, and inspect its run record and labeled article provenance.
+- Upload a small JPEG/PNG/WebP image and confirm the returned URL is on `https://i.ibb.co/`.
 - Import a license-compatible test article and review its source attribution before publishing.
 - Open a published article and verify canonical, Open Graph, and attribution output.
 - Validate `/sitemap.xml`, `/sitemap-images.xml`, `/feed.xml`, `/robots.txt`, and the IndexNow key URL.
@@ -46,7 +50,7 @@ If runtime `CREATE`/`ALTER` privileges are unavailable, import `database/schema.
 
 ## IndexNow scheduler behavior
 
-The scheduler is pure PHP and is registered on ordinary requests. It atomically leases a due task in MySQL, releases the user's response, and submits a bounded batch afterward. The default interval is 3,000 seconds (50 minutes). No cron job, queue worker, or daemon is needed. On a zero-traffic site, a due run waits until the next request; this is the unavoidable tradeoff of cron-free shared hosting.
+The scheduler is pure PHP and is registered on ordinary requests. It atomically leases each due task in MySQL and releases the user's response before doing background-safe work. IndexNow submits a bounded batch every 3,000 seconds (50 minutes); the separately leased bot queue checks for one due administrator-approved job every 300 seconds. No cron job, queue worker, or daemon is needed. On a zero-traffic site, a due run waits until the next request; this is the unavoidable tradeoff of cron-free shared hosting.
 
 ## Security and operations
 
@@ -61,6 +65,6 @@ The scheduler is pure PHP and is registered on ordinary requests. It atomically 
 1. Put the site in the host's maintenance mode if available.
 2. Restore the previous web files and `config/local.php`.
 3. Restore the pre-deployment database backup if the new schema or fresh reset ran.
-4. Clear browser/service-worker caches after restoring; this release uses cache namespace `bvwiki-v5`.
+4. Clear browser/service-worker caches after restoring; this release uses cache namespace `banglaverse-shell-v6`.
 
 A file-only rollback is not sufficient after an intentional fresh-content reset; the database backup is required to recover deleted legacy content.

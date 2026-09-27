@@ -90,7 +90,8 @@
                 if (!response.ok) return hide();
                 const data = await response.json();
                 if (!data.results?.length) {
-                    suggestions.innerHTML = `<a class="search-suggestion" href="/create?title=${encodeURIComponent(query)}"><span><strong>Create “${escapeHtml(query)}”</strong><span>No exact page? Start one.</span></span></a>`;
+                    const alternatives = (data.suggestions || []).map(item => `<a class="search-suggestion" href="/wiki/${encodeURIComponent(item.slug)}"><span><strong>${escapeHtml(item.title)}</strong><span>Suggested title</span></span></a>`).join('');
+                    suggestions.innerHTML = alternatives + `<a class="search-suggestion" href="/create?title=${encodeURIComponent(query)}"><span><strong>Create “${escapeHtml(query)}”</strong><span>No exact page? Start one.</span></span></a>`;
                 } else {
                     suggestions.innerHTML = data.results.map(item => `<a class="search-suggestion" href="/wiki/${encodeURIComponent(item.slug)}"><span><strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(item.excerpt || '')}</span></span></a>`).join('');
                 }

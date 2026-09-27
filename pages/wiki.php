@@ -4,12 +4,19 @@ require_once dirname(__DIR__) . '/config/database.php';
 require_once APP_ROOT . '/includes/WikiParser.php';
 
 $slug = trim(rawurldecode((string) ($_GET['slug'] ?? '')));
-$stmt = $pdo->prepare("SELECT a.*, u.username AS author_name,
+$stmt = $pdo->prepare("SELECT a.*, u.username AS author_name, b.name AS bot_name,
     (SELECT MAX(r.created_at) FROM revisions r WHERE r.article_id = a.id) AS last_revision_at,
     (SELECT u2.username FROM revisions r2 LEFT JOIN users u2 ON u2.id = r2.user_id WHERE r2.article_id = a.id ORDER BY r2.id DESC LIMIT 1) AS last_editor
-    FROM articles a LEFT JOIN users u ON u.id = a.author_id WHERE a.slug = ? LIMIT 1");
+    FROM articles a LEFT JOIN users u ON u.id = a.author_id LEFT JOIN bots b ON b.id = a.created_by_bot_id WHERE a.slug = ? LIMIT 1");
 $stmt->execute([$slug]);
 $article = $stmt->fetch();
+if (!$article && $slug !== '') {
+    $redirectStmt = $pdo->prepare("SELECT a.slug FROM page_redirects pr JOIN articles a ON a.id = pr.target_article_id WHERE pr.source_slug = ? AND a.status = 'published' LIMIT 1");
+    $redirectStmt->execute([$slug]);
+    if ($targetSlug = $redirectStmt->fetchColumn()) {
+        redirect('/wiki/' . rawurlencode((string) $targetSlug), 301);
+    }
+}
 
 if (!$article || !article_is_visible($article)) {
     http_response_code(404);
@@ -37,6 +44,7 @@ if (($article['status'] ?? 'published') === 'published' && empty($_SESSION['view
     $article['views']++;
 }
 
+$protection = active_article_protection($pdo, (int) $article['id']);
 $parser = new WikiParser();
 $parsed = $parser->parse((string) $article['content']);
 $categoryStmt = $pdo->prepare('SELECT c.name, c.slug FROM categories c JOIN article_categories ac ON ac.category_id = c.id WHERE ac.article_id = ? ORDER BY c.name');
@@ -95,7 +103,7 @@ require APP_ROOT . '/includes/header.php';
             </nav>
             <h2 class="rail-heading">Contribute</h2>
             <nav class="rail-nav">
-                <a href="/create">Create article</a><a href="/wiki/help-editing">Editing help</a><a href="/wiki/community-portal">Community portal</a>
+                <a href="/create">Create article</a><a href="/policy/editing-style">Editing help</a><a href="/community">Community portal</a>
             </nav>
         </div>
     </aside>
@@ -108,13 +116,14 @@ require APP_ROOT . '/includes/header.php';
             <?php if ($description): ?><p class="article-description"><?= e($description) ?></p><?php endif; ?>
             <nav class="article-tabs" aria-label="Page actions">
                 <div class="tabs-left"><a class="active" href="/wiki/<?= e($article['slug']) ?>">Article</a><a href="/talk/<?= e($article['slug']) ?>">Talk</a></div>
-                <div class="tabs-right"><a href="/history/<?= e($article['slug']) ?>">History</a><?php if (is_logged_in()): ?><a href="/edit/<?= e($article['slug']) ?>">Edit <span class="label">source</span></a><?php endif; ?></div>
+                <div class="tabs-right"><a href="/history/<?= e($article['slug']) ?>">History</a><?php if (is_logged_in() && can_edit_article($pdo, $article)): ?><a href="/edit/<?= e($article['slug']) ?>">Edit <span class="label">source</span></a><?php elseif ($protection): ?><span class="protected-tab" title="<?= e($protection['reason']) ?>">🔒 Administrator protected</span><?php endif; ?></div>
             </nav>
             <div class="article-byline">
-                <span>Last edited <?= e(time_ago($article['last_revision_at'] ?: $article['updated_at'])) ?><?= $article['last_editor'] ? ' by ' . e($article['last_editor']) : '' ?></span>
+                <span>Last edited <?= e(time_ago($article['last_revision_at'] ?: $article['updated_at'])) ?><?= $article['last_editor'] ? ' by ' . e($article['last_editor']) : '' ?><?= $article['bot_name'] ? ' · initially structured by ' . e($article['bot_name']) : '' ?></span>
                 <span><?= format_number($article['views']) ?> views · <?= format_number($article['edit_count']) ?> edits · <?= format_number($article['likes']) ?> appreciations</span>
             </div>
         </header>
+        <?php if ($protection): ?><aside class="wiki-notice protection-notice"><strong>Administrator-protected page</strong><span><?= e($protection['reason']) ?><?php if ($protection['expires_at']): ?> Protection expires <?= e(date('M j, Y H:i', strtotime($protection['expires_at']))) ?> UTC.<?php endif; ?> Only administrators can edit or restore this article.</span></aside><?php endif; ?>
 
         <?= $parsed['toc'] ?>
         <div class="wiki-content">
@@ -139,11 +148,13 @@ require APP_ROOT . '/includes/header.php';
                 <?php endif; ?>
                 <button type="button" data-copy-url="<?= e($page_canonical) ?>">Copy permanent link</button>
                 <button type="button" onclick="window.print()">Printable version</button>
+                <a href="/special/what-links-here/<?= e($article['slug']) ?>">What links here</a>
+                <?php if (is_admin()): ?><?php if ($protection): ?><form action="/article-action" method="post"><?= csrf_field() ?><input type="hidden" name="article_id" value="<?= (int) $article['id'] ?>"><input type="hidden" name="action" value="unprotect"><button type="submit">🔓 Remove protection</button></form><?php else: ?><details class="rail-protection"><summary>🔒 Protect article</summary><form action="/article-action" method="post"><?= csrf_field() ?><input type="hidden" name="article_id" value="<?= (int) $article['id'] ?>"><input type="hidden" name="action" value="protect"><input name="reason" maxlength="500" required placeholder="Reason"><select name="expiry_days"><option value="0">Permanent</option><option value="1">1 day</option><option value="7">1 week</option><option value="30">30 days</option><option value="365">1 year</option></select><button type="submit">Apply protection</button></form></details><?php endif; ?><?php endif; ?>
                 <a href="/report/<?= e($article['slug']) ?>">Report a concern</a>
                 <a href="/feed.xml">RSS feed</a>
             </div>
             <h2 class="rail-heading">Page information</h2>
-            <div class="article-facts"><dl><dt>Status</dt><dd><?= e(ucfirst($article['status'])) ?></dd><dt>Created</dt><dd><?= e(date('M j, Y', strtotime($article['created_at']))) ?></dd><dt>Updated</dt><dd><?= e(date('M j, Y', strtotime($article['updated_at']))) ?></dd><dt>Words</dt><dd><?= format_number(word_count_unicode($article['content'])) ?></dd></dl></div>
+            <div class="article-facts"><dl><dt>Status</dt><dd><?= e(ucfirst($article['status'])) ?><?= $protection ? ' · Protected' : '' ?></dd><?php if ($article['bot_name']): ?><dt>Origin</dt><dd><?= e($article['bot_name']) ?></dd><?php endif; ?><dt>Created</dt><dd><?= e(date('M j, Y', strtotime($article['created_at']))) ?></dd><dt>Updated</dt><dd><?= e(date('M j, Y', strtotime($article['updated_at']))) ?></dd><dt>Words</dt><dd><?= format_number(word_count_unicode($article['content'])) ?></dd></dl></div>
         </div>
     </aside>
 </main>
@@ -153,7 +164,7 @@ $articleSchema = [
     'mainEntityOfPage' => ['@type' => 'WebPage', '@id' => $page_canonical],
     'headline' => $article['title'], 'description' => $description, 'image' => [$page_image],
     'datePublished' => $article['published_at'] ?: $article['created_at'], 'dateModified' => $article['updated_at'],
-    'author' => ['@type' => 'Person', 'name' => $article['author_name'] ?: 'BanglaVerseWiki community'],
+    'author' => ['@type' => $article['bot_name'] ? 'Organization' : 'Person', 'name' => $article['bot_name'] ?: ($article['author_name'] ?: 'BanglaVerseWiki community')],
     'publisher' => ['@type' => 'Organization', 'name' => SITE_NAME, 'logo' => ['@type' => 'ImageObject', 'url' => site_url('/img/icon/android-chrome-512x512.png')]],
     'inLanguage' => SITE_LANGUAGE, 'isAccessibleForFree' => true,
 ];

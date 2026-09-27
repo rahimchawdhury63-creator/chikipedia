@@ -1,5 +1,5 @@
-const CACHE = 'banglaverse-shell-v5';
-const SHELL = ['/assets/css/app.css?v=5', '/assets/js/app.js?v=5', '/img/brand/logo.svg', '/img/brand/social-default-384.webp', '/manifest.webmanifest'];
+const CACHE = 'banglaverse-shell-v6';
+const SHELL = ['/assets/css/app.css?v=6', '/assets/js/app.js?v=6', '/img/brand/logo.svg', '/img/brand/social-default-384.webp', '/manifest.webmanifest'];
 self.addEventListener('install', event => event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)).then(() => self.skipWaiting())));
 self.addEventListener('activate', event => event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key !== CACHE).map(key => caches.delete(key)))).then(() => self.clients.claim())));
 self.addEventListener('fetch', event => {

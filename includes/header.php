@@ -66,7 +66,7 @@ $websiteSchema = [
     <meta name="twitter:title" content="<?= e($page_title) ?>">
     <meta name="twitter:description" content="<?= e($page_description) ?>">
     <meta name="twitter:image" content="<?= e($page_image) ?>">
-    <link rel="stylesheet" href="/assets/css/app.css?v=5">
+    <link rel="stylesheet" href="/assets/css/app.css?v=6">
     <script type="application/ld+json"><?= json_encode($websiteSchema, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG) ?></script>
 </head>
 <body class="<?= e($body_class) ?>">
@@ -82,6 +82,7 @@ $websiteSchema = [
             <span class="brand-copy"><strong>BanglaVerse</strong><small>WIKI · মুক্ত বিশ্বকোষ</small></span>
         </a>
         <form class="header-search" action="/search" method="get" role="search" data-search-form>
+            <input type="hidden" name="go" value="1">
             <label class="sr-only" for="global-search">Search BanglaVerseWiki</label>
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
             <input id="global-search" name="q" type="search" value="<?= e($_GET['q'] ?? '') ?>" placeholder="Search knowledge…" autocomplete="off" enterkeyhint="search" data-search-input>
@@ -89,6 +90,7 @@ $websiteSchema = [
             <div class="search-suggestions" data-search-suggestions hidden></div>
         </form>
         <nav class="header-actions" aria-label="Account">
+            <a class="icon-link desktop-only" href="/community" title="Community portal">Community</a>
             <a class="icon-link desktop-only" href="/special/recent" title="Recent changes">Recent changes</a>
             <?php if (is_logged_in()): ?>
                 <a class="button button-primary desktop-create" href="/create">Create article</a>
@@ -114,6 +116,8 @@ $websiteSchema = [
         <a href="/special/popular">Popular articles</a>
         <a href="/special/random">Random article</a>
         <a href="/categories">Categories</a>
+        <a href="/community">Community portal</a>
+        <a href="/policies">Policies &amp; guidelines</a>
         <?php if (is_logged_in()): ?>
             <a href="/create">Create article</a>
             <a href="/drafts">My workspace</a>

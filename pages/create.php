@@ -82,6 +82,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $revision->execute([$articleId, current_user()['id'], $sourceTitle, $sourceContent, $summary, !empty($_POST['is_minor']) ? 1 : 0]);
             sync_article_categories($pdo, $articleId, extract_categories($sourceContent));
             sync_search_document($pdo, $articleId);
+            sync_article_links($pdo, $articleId, $sourceContent);
             attach_remote_import($pdo, $sourceImportId, $articleId, (int) current_user()['id']);
             $pdo->prepare('DELETE FROM drafts WHERE user_id = ? AND article_id IS NULL')->execute([current_user()['id']]);
             $pdo->commit();

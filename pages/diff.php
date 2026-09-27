@@ -6,6 +6,7 @@ $articleStmt = $pdo->prepare('SELECT * FROM articles WHERE slug = ? LIMIT 1');
 $articleStmt->execute([$slug]);
 $article = $articleStmt->fetch();
 if (!$article || !article_is_visible($article)) { http_response_code(404); exit('Article not found.'); }
+$protection = active_article_protection($pdo, (int) $article['id']);
 $oldId = (int) ($_GET['old'] ?? 0); $newId = (int) ($_GET['new'] ?? 0);
 if (!$oldId || !$newId || $oldId === $newId) { flash('warning', 'Select two different revisions to compare.'); redirect('/history/' . rawurlencode($slug)); }
 $revStmt = $pdo->prepare('SELECT r.*, u.username FROM revisions r LEFT JOIN users u ON u.id = r.user_id WHERE r.article_id = ? AND r.id IN (?, ?) ORDER BY r.id');
@@ -38,7 +39,7 @@ require APP_ROOT . '/includes/header.php';
 ?>
 <main id="main-content" class="page-container">
 <header class="page-heading"><span class="eyebrow">Revision comparison</span><h1><?= e($article['title']) ?></h1><p>Removed lines appear in red; added lines appear in green.</p></header>
-<div class="form-actions" style="margin-bottom:18px"><a class="button" href="/history/<?= e($slug) ?>">← Revision history</a><a class="button" href="/wiki/<?= e($slug) ?>">Current article</a><?php if (is_logged_in()): ?><form action="/article-action" method="post" onsubmit="return confirm('Restore this older revision as a new version?')"><?= csrf_field() ?><input type="hidden" name="article_id" value="<?= (int) $article['id'] ?>"><input type="hidden" name="revision_id" value="<?= (int) $old['id'] ?>"><input type="hidden" name="action" value="rollback"><button class="button" type="submit">Restore older revision</button></form><?php endif; ?></div>
+<div class="form-actions" style="margin-bottom:18px"><a class="button" href="/history/<?= e($slug) ?>">← Revision history</a><a class="button" href="/wiki/<?= e($slug) ?>">Current article</a><?php if (is_logged_in() && can_edit_article($pdo, $article)): ?><form action="/article-action" method="post" onsubmit="return confirm('Restore this older revision as a new version?')"><?= csrf_field() ?><input type="hidden" name="article_id" value="<?= (int) $article['id'] ?>"><input type="hidden" name="revision_id" value="<?= (int) $old['id'] ?>"><input type="hidden" name="action" value="rollback"><button class="button" type="submit">Restore older revision</button></form><?php endif; ?></div>
 <div class="table-responsive"><table class="diff-table"><thead><tr><th>Revision <?= (int) $old['id'] ?> · <?= e($old['username'] ?: 'Unknown') ?> · <?= e($old['created_at']) ?></th><th>Revision <?= (int) $new['id'] ?> · <?= e($new['username'] ?: 'Unknown') ?> · <?= e($new['created_at']) ?></th></tr></thead><tbody><?php foreach ($diff as [$kind, $left, $right]): ?><tr><td class="diff-line-<?= $kind === 'removed' || $kind === 'changed' ? 'old' : 'same' ?>"><?= e(($kind === 'removed' || $kind === 'changed' ? '− ' : '  ') . $left) ?></td><td class="diff-line-<?= $kind === 'added' || $kind === 'changed' ? 'new' : 'same' ?>"><?= e(($kind === 'added' || $kind === 'changed' ? '+ ' : '  ') . $right) ?></td></tr><?php endforeach; ?></tbody></table></div>
 </main>
 <?php require APP_ROOT . '/includes/footer.php'; ?>

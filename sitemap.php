@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 require_once __DIR__ . '/config/database.php';
+require_once APP_ROOT . '/includes/PolicyCatalog.php';
 header('Content-Type: application/xml; charset=utf-8');
 header('Cache-Control: public, max-age=1800');
 
@@ -66,8 +67,11 @@ $stmt = $pdo->query("SELECT title, slug, updated_at, featured_image FROM article
 echo '<?xml version="1.0" encoding="UTF-8"?>' . "\n";
 echo '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">';
 if ($articlePage === 1) {
-    foreach ([['/', 'daily', '1.0'], ['/categories', 'weekly', '0.7'], ['/special/recent', 'hourly', '0.6'], ['/special/popular', 'daily', '0.7']] as [$path, $frequency, $priority]) {
+    foreach ([['/', 'daily', '1.0'], ['/community', 'daily', '0.8'], ['/policies', 'monthly', '0.8'], ['/categories', 'weekly', '0.7'], ['/special/recent', 'hourly', '0.6'], ['/special/popular', 'daily', '0.7']] as [$path, $frequency, $priority]) {
         echo '<url><loc>' . $escape(site_url($path)) . '</loc><lastmod>' . gmdate('c') . '</lastmod><changefreq>' . $frequency . '</changefreq><priority>' . $priority . '</priority></url>';
+    }
+    foreach (array_keys(policy_catalog()) as $policySlug) {
+        echo '<url><loc>' . $escape(site_url('/policy/' . rawurlencode($policySlug))) . '</loc><changefreq>monthly</changefreq><priority>0.65</priority></url>';
     }
     $categories = $pdo->query('SELECT slug FROM categories ORDER BY id')->fetchAll();
     foreach ($categories as $category) echo '<url><loc>' . $escape(site_url('/category/' . rawurlencode($category['slug']))) . '</loc><changefreq>weekly</changefreq><priority>0.6</priority></url>';

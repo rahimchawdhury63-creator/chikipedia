@@ -324,6 +324,55 @@ function extract_categories(string $source): array
     return array_values(array_unique(array_map('trim', $matches[1] ?? [])));
 }
 
+function active_article_protection(PDO $pdo, int $articleId): ?array
+{
+    $stmt = $pdo->prepare("SELECT p.*, u.username AS protected_by_name FROM article_protections p LEFT JOIN users u ON u.id = p.protected_by WHERE p.article_id = ? AND (p.expires_at IS NULL OR p.expires_at > UTC_TIMESTAMP()) LIMIT 1");
+    $stmt->execute([$articleId]);
+    return $stmt->fetch() ?: null;
+}
+
+function can_edit_article(PDO $pdo, array $article): bool
+{
+    return active_article_protection($pdo, (int) $article['id']) === null || is_admin();
+}
+
+function link_target_key(string $title): string
+{
+    $normalized = mb_strtolower(trim(preg_replace('/\s+/u', ' ', $title) ?? $title));
+    return hash('sha256', $normalized);
+}
+
+function extract_internal_links(string $source): array
+{
+    preg_match_all('/\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^]]*)?\]\]/u', $source, $matches);
+    $links = [];
+    foreach ($matches[1] ?? [] as $title) {
+        $title = trim($title);
+        if ($title === '' || preg_match('/^(?:File|Image|চিত্র|Category|বিষয়শ্রেণী|Special|User|Talk):/iu', $title)) {
+            continue;
+        }
+        $links[link_target_key($title)] = mb_substr($title, 0, 255);
+    }
+    return $links;
+}
+
+function sync_article_links(PDO $pdo, int $articleId, string $source): void
+{
+    $pdo->prepare('DELETE FROM article_links WHERE source_article_id = ?')->execute([$articleId]);
+    $find = $pdo->prepare('SELECT id FROM articles WHERE LOWER(title) = LOWER(?) OR slug = ? LIMIT 1');
+    $insert = $pdo->prepare('INSERT IGNORE INTO article_links (source_article_id, target_article_id, target_title, target_key) VALUES (?, ?, ?, ?)');
+    foreach (extract_internal_links($source) as $key => $title) {
+        $find->execute([$title, slugify($title)]);
+        $targetId = $find->fetchColumn();
+        $insert->execute([$articleId, $targetId ? (int) $targetId : null, $title, $key]);
+    }
+    $titleStmt = $pdo->prepare('SELECT title FROM articles WHERE id = ?');
+    $titleStmt->execute([$articleId]);
+    if ($title = $titleStmt->fetchColumn()) {
+        $pdo->prepare('UPDATE article_links SET target_article_id = ? WHERE target_article_id IS NULL AND target_key = ?')->execute([$articleId, link_target_key((string) $title)]);
+    }
+}
+
 function attach_remote_import(PDO $pdo, int $importId, int $articleId, int $userId): void
 {
     if ($importId < 1) {
@@ -371,63 +420,170 @@ function sync_search_document(PDO $pdo, int $articleId): void
     $upsert->execute([$articleId, $article['title'], normalize_search_query($article['title']), $article['content'], $article['excerpt'], SITE_LANGUAGE, $quality, $popularity, $article['updated_at']]);
 }
 
-function smart_search(PDO $pdo, string $query, string $scope = 'all', int $limit = 15, int $offset = 0): array
+function smart_search(PDO $pdo, string $query, string $scope = 'all', int $limit = 15, int $offset = 0, string $sort = 'relevance'): array
 {
     $normalized = normalize_search_query($query);
     if ($normalized === '') {
-        return ['results' => [], 'total' => 0, 'synonyms' => []];
+        return ['results' => [], 'total' => 0, 'synonyms' => [], 'terms' => []];
     }
     $scope = in_array($scope, ['all', 'title', 'content'], true) ? $scope : 'all';
+    $sort = in_array($sort, ['relevance', 'newest', 'popular'], true) ? $sort : 'relevance';
     $limit = max(1, min(50, $limit));
     $offset = max(0, $offset);
+
+    $tokens = preg_split('/\s+/u', $normalized, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+    $lookupTerms = array_slice(array_values(array_unique([$normalized, ...$tokens])), 0, 8);
+    $placeholders = implode(',', array_fill(0, count($lookupTerms), '?'));
+    $synonymStmt = $pdo->prepare("SELECT term, synonym, weight FROM search_synonyms WHERE is_active = 1 AND (term IN ({$placeholders}) OR synonym IN ({$placeholders})) ORDER BY weight DESC LIMIT 12");
+    $synonymStmt->execute([...$lookupTerms, ...$lookupTerms]);
+    $synonyms = [];
+    $termWeights = [];
+    foreach ($synonymStmt->fetchAll() as $row) {
+        $related = (string) (in_array($row['term'], $lookupTerms, true) ? $row['synonym'] : $row['term']);
+        $synonyms[] = $related;
+        $termWeights[$related] = max($termWeights[$related] ?? 0.0, max(0.1, min(2.0, (float) $row['weight'])));
+    }
+    $synonyms = array_values(array_unique(array_filter(array_map('strval', $synonyms))));
+    foreach ($tokens as $token) {
+        $termWeights[$token] = max($termWeights[$token] ?? 0.0, 1.0);
+    }
+    $terms = array_slice(array_keys($termWeights), 0, 8);
+    if (!$terms) {
+        $terms = [$normalized];
+        $termWeights[$normalized] = 1.0;
+    }
+
     $contains = '%' . $normalized . '%';
     $prefix = $normalized . '%';
-    $synonymStmt = $pdo->prepare('SELECT synonym FROM search_synonyms WHERE term = ? AND is_active = 1 ORDER BY weight DESC LIMIT 4');
-    $synonymStmt->execute([$normalized]);
-    $synonyms = array_values(array_filter(array_map('strval', $synonymStmt->fetchAll(PDO::FETCH_COLUMN))));
-    $fulltext = trim($normalized . ' ' . implode(' ', $synonyms));
-
-    if ($scope === 'title') {
-        $scoreSql = "(CASE WHEN sd.normalized_title = ? THEN 1200 ELSE 0 END + CASE WHEN sd.normalized_title LIKE ? THEN 500 ELSE 0 END + CASE WHEN sd.normalized_title LIKE ? THEN 220 ELSE 0 END + LN(a.views + 2) * 5 + a.likes * 4 + sd.quality_score * .25)";
-        $whereSql = 'sd.normalized_title LIKE ?';
-        $scoreParams = [$normalized, $prefix, $contains];
-        $whereParams = [$contains];
-    } elseif ($scope === 'content') {
-        $scoreSql = '(CASE WHEN sd.body LIKE ? THEN 180 ELSE 0 END + LN(a.views + 2) * 5 + a.likes * 4 + sd.quality_score * .35)';
-        $whereSql = 'sd.body LIKE ?';
-        $scoreParams = [$contains];
-        $whereParams = [$contains];
-    } else {
-        $scoreSql = "(CASE WHEN sd.normalized_title = ? THEN 1200 ELSE 0 END + CASE WHEN sd.normalized_title LIKE ? THEN 500 ELSE 0 END + CASE WHEN sd.normalized_title LIKE ? THEN 220 ELSE 0 END + MATCH(sd.title, sd.normalized_title, sd.body) AGAINST (? IN NATURAL LANGUAGE MODE) * 80 + LN(a.views + 2) * 5 + a.likes * 4 + a.edit_count * .6 + sd.quality_score * .35)";
-        $whereSql = '(MATCH(sd.title, sd.normalized_title, sd.body) AGAINST (? IN NATURAL LANGUAGE MODE) > 0 OR sd.normalized_title LIKE ? OR sd.body LIKE ?)';
-        $scoreParams = [$normalized, $prefix, $contains, $fulltext];
-        $whereParams = [$fulltext, $contains, $contains];
+    $scoreParts = [
+        'CASE WHEN sd.normalized_title = ? THEN 1400 ELSE 0 END',
+        'CASE WHEN sd.normalized_title LIKE ? THEN 620 ELSE 0 END',
+        'CASE WHEN sd.normalized_title LIKE ? THEN 260 ELSE 0 END',
+    ];
+    $baseScoreParams = [$normalized, $prefix, $contains];
+    $likeWhere = [];
+    $likeWhereParams = [];
+    foreach ($terms as $term) {
+        $needle = '%' . $term . '%';
+        $weight = max(0.1, min(2.0, (float) ($termWeights[$term] ?? 1.0)));
+        $titleSignal = number_format(110 * $weight, 2, '.', '');
+        $contentSignal = number_format(24 * $weight, 2, '.', '');
+        if ($scope === 'title') {
+            $scoreParts[] = 'CASE WHEN sd.normalized_title LIKE ? THEN ' . $titleSignal . ' ELSE 0 END';
+            $baseScoreParams[] = $needle;
+            $likeWhere[] = 'sd.normalized_title LIKE ?';
+            $likeWhereParams[] = $needle;
+        } elseif ($scope === 'content') {
+            $scoreParts[] = 'CASE WHEN sd.body LIKE ? THEN ' . number_format(35 * $weight, 2, '.', '') . ' ELSE 0 END';
+            $baseScoreParams[] = $needle;
+            $likeWhere[] = 'sd.body LIKE ?';
+            $likeWhereParams[] = $needle;
+        } else {
+            $scoreParts[] = '(CASE WHEN sd.normalized_title LIKE ? THEN ' . $titleSignal . ' ELSE 0 END + CASE WHEN sd.body LIKE ? THEN ' . $contentSignal . ' ELSE 0 END)';
+            array_push($baseScoreParams, $needle, $needle);
+            $likeWhere[] = '(sd.normalized_title LIKE ? OR sd.body LIKE ?)';
+            array_push($likeWhereParams, $needle, $needle);
+        }
     }
+    $scoreParts[] = 'LN(a.views + 2) * 5 + a.likes * 4 + a.edit_count * .6 + sd.quality_score * .35 + sd.popularity_score * .08';
+    $fallbackScoreSql = '(' . implode(' + ', $scoreParts) . ')';
+    $fallbackWhereSql = '(' . implode(' OR ', $likeWhere) . ')';
+    $scoreSql = $fallbackScoreSql;
+    $whereSql = $fallbackWhereSql;
+    $scoreParams = $baseScoreParams;
+    $whereParams = $likeWhereParams;
+
+    if ($scope === 'all') {
+        $fulltext = trim($normalized . ' ' . implode(' ', $synonyms));
+        $scoreSql = '(' . implode(' + ', $scoreParts) . ' + MATCH(sd.title, sd.normalized_title, sd.body) AGAINST (? IN NATURAL LANGUAGE MODE) * 85)';
+        $scoreParams[] = $fulltext;
+        $whereSql = '(MATCH(sd.title, sd.normalized_title, sd.body) AGAINST (? IN NATURAL LANGUAGE MODE) > 0 OR ' . implode(' OR ', $likeWhere) . ')';
+        $whereParams = [$fulltext, ...$likeWhereParams];
+    }
+
+    $orderSql = match ($sort) {
+        'newest' => 'a.updated_at DESC, search_score DESC',
+        'popular' => 'a.views DESC, a.likes DESC, search_score DESC',
+        default => 'search_score DESC, a.updated_at DESC',
+    };
+    $select = "SELECT a.id, a.title, a.slug, a.content, a.excerpt, a.views, a.likes, a.updated_at, sd.quality_score, sd.popularity_score, %s AS search_score,
+        (SELECT c.name FROM article_categories ac JOIN categories c ON c.id = ac.category_id WHERE ac.article_id = a.id ORDER BY c.name LIMIT 1) AS category_name
+        FROM search_documents sd JOIN articles a ON a.id = sd.article_id
+        WHERE a.status = 'published' AND %s
+        ORDER BY {$orderSql} LIMIT {$limit} OFFSET {$offset}";
 
     try {
         $count = $pdo->prepare("SELECT COUNT(*) FROM search_documents sd JOIN articles a ON a.id = sd.article_id WHERE a.status = 'published' AND {$whereSql}");
         $count->execute($whereParams);
-        $total = (int) $count->fetchColumn();
-        $sql = "SELECT a.title, a.slug, a.content, a.excerpt, a.views, a.likes, a.updated_at, sd.quality_score, {$scoreSql} AS search_score,
-            (SELECT c.name FROM article_categories ac JOIN categories c ON c.id = ac.category_id WHERE ac.article_id = a.id ORDER BY c.name LIMIT 1) AS category_name
-            FROM search_documents sd JOIN articles a ON a.id = sd.article_id
-            WHERE a.status = 'published' AND {$whereSql}
-            ORDER BY search_score DESC, a.updated_at DESC LIMIT {$limit} OFFSET {$offset}";
-        $stmt = $pdo->prepare($sql);
+        $stmt = $pdo->prepare(sprintf($select, $scoreSql, $whereSql));
         $stmt->execute([...$scoreParams, ...$whereParams]);
-        return ['results' => $stmt->fetchAll(), 'total' => $total, 'synonyms' => $synonyms];
+        return ['results' => $stmt->fetchAll(), 'total' => (int) $count->fetchColumn(), 'synonyms' => $synonyms, 'terms' => $terms];
     } catch (Throwable $exception) {
         error_log('Smart search fallback: ' . $exception->getMessage());
-        $fallback = $pdo->prepare("SELECT title, slug, content, excerpt, views, likes, updated_at, 0 AS quality_score,
-            (CASE WHEN LOWER(title) = ? THEN 1200 WHEN LOWER(title) LIKE ? THEN 500 WHEN title LIKE ? THEN 220 ELSE 20 END) AS search_score,
-            NULL AS category_name
-            FROM articles WHERE status = 'published' AND (title LIKE ? OR content LIKE ?)
-            ORDER BY search_score DESC, views DESC, updated_at DESC LIMIT {$limit} OFFSET {$offset}");
-        $fallback->execute([$normalized, $prefix, $contains, $contains, $contains]);
-        $count = $pdo->prepare("SELECT COUNT(*) FROM articles WHERE status = 'published' AND (title LIKE ? OR content LIKE ?)");
-        $count->execute([$contains, $contains]);
-        return ['results' => $fallback->fetchAll(), 'total' => (int) $count->fetchColumn(), 'synonyms' => $synonyms];
+        $count = $pdo->prepare("SELECT COUNT(*) FROM search_documents sd JOIN articles a ON a.id = sd.article_id WHERE a.status = 'published' AND {$fallbackWhereSql}");
+        $count->execute($likeWhereParams);
+        $stmt = $pdo->prepare(sprintf($select, $fallbackScoreSql, $fallbackWhereSql));
+        $stmt->execute([...$baseScoreParams, ...$likeWhereParams]);
+        return ['results' => $stmt->fetchAll(), 'total' => (int) $count->fetchColumn(), 'synonyms' => $synonyms, 'terms' => $terms];
     }
+}
+
+function search_title_suggestions(PDO $pdo, string $query, int $limit = 5): array
+{
+    $normalized = normalize_search_query($query);
+    if ($normalized === '') {
+        return [];
+    }
+    $firstToken = preg_split('/\s+/u', $normalized, 2)[0] ?? $normalized;
+    $stmt = $pdo->prepare("SELECT title, slug, views FROM articles WHERE status = 'published' AND (LOWER(title) LIKE ? OR LOWER(title) LIKE ?) ORDER BY views DESC, updated_at DESC LIMIT 60");
+    $stmt->execute([$firstToken . '%', '%' . $firstToken . '%']);
+    $candidates = [];
+    foreach ($stmt->fetchAll() as $row) {
+        $candidate = normalize_search_query((string) $row['title']);
+        similar_text($normalized, $candidate, $similarity);
+        if (str_starts_with($candidate, $normalized)) {
+            $similarity += 35;
+        }
+        $row['similarity'] = $similarity + min(10, log10((int) $row['views'] + 1) * 2);
+        $candidates[] = $row;
+    }
+    usort($candidates, static fn(array $a, array $b): int => $b['similarity'] <=> $a['similarity']);
+    return array_slice($candidates, 0, max(1, min(10, $limit)));
+}
+
+function search_result_excerpt(string $source, string $query, int $length = 230): string
+{
+    $clean = excerpt($source, max(1200, $length * 4));
+    $terms = preg_split('/\s+/u', normalize_search_query($query), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+    $position = false;
+    foreach ($terms as $term) {
+        $found = mb_stripos($clean, $term);
+        if ($found !== false && ($position === false || $found < $position)) {
+            $position = $found;
+        }
+    }
+    if ($position === false || mb_strlen($clean) <= $length) {
+        return excerpt($clean, $length);
+    }
+    $start = max(0, (int) $position - (int) floor($length * .3));
+    $snippet = trim(mb_substr($clean, $start, $length));
+    return ($start > 0 ? '…' : '') . $snippet . (mb_strlen($clean) > $start + $length ? '…' : '');
+}
+
+function resolve_search_destination(PDO $pdo, string $query): ?string
+{
+    $normalized = normalize_search_query($query);
+    if ($normalized === '') {
+        return null;
+    }
+    $stmt = $pdo->prepare("SELECT a.slug FROM search_documents sd JOIN articles a ON a.id = sd.article_id WHERE a.status = 'published' AND (sd.normalized_title = ? OR a.slug = ?) ORDER BY a.views DESC LIMIT 1");
+    $stmt->execute([$normalized, slugify($query)]);
+    if ($slug = $stmt->fetchColumn()) {
+        return (string) $slug;
+    }
+    $redirect = $pdo->prepare("SELECT a.slug FROM page_redirects pr JOIN articles a ON a.id = pr.target_article_id WHERE pr.source_slug = ? AND a.status = 'published' LIMIT 1");
+    $redirect->execute([slugify($query)]);
+    return ($slug = $redirect->fetchColumn()) ? (string) $slug : null;
 }
 
 function record_search_query(PDO $pdo, string $query, int $resultCount): void
@@ -484,8 +640,35 @@ function notify_indexnow(array $urls): bool
     return (bool) submit_indexnow_batch($urls)['success'];
 }
 
+function run_bot_scheduler(PDO $pdo): void
+{
+    if (setting($pdo, 'bot_scheduler_enabled', '1') !== '1') {
+        return;
+    }
+    try {
+        $claim = $pdo->prepare("UPDATE scheduled_tasks SET locked_at = UTC_TIMESTAMP(), last_started_at = UTC_TIMESTAMP(), status = 'running', next_run_at = DATE_ADD(UTC_TIMESTAMP(), INTERVAL interval_seconds SECOND) WHERE task_name = 'bot_article_queue' AND next_run_at <= UTC_TIMESTAMP() AND (locked_at IS NULL OR locked_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL 15 MINUTE))");
+        $claim->execute();
+        if ($claim->rowCount() !== 1) {
+            return;
+        }
+        require_once APP_ROOT . '/includes/BotService.php';
+        $result = (new BotService($pdo))->runNext();
+        $message = $result ? (string) $result['message'] : 'Queue checked; no due bot jobs.';
+        $status = ($result['status'] ?? 'idle') === 'failed' ? 'failed' : 'idle';
+        $finish = $pdo->prepare("UPDATE scheduled_tasks SET locked_at = NULL, last_finished_at = UTC_TIMESTAMP(), status = ?, last_message = ?, run_count = run_count + 1 WHERE task_name = 'bot_article_queue'");
+        $finish->execute([$status, mb_substr($message, 0, 500)]);
+    } catch (Throwable $exception) {
+        error_log('Bot scheduler failed: ' . $exception->getMessage());
+        try {
+            $pdo->prepare("UPDATE scheduled_tasks SET locked_at = NULL, status = 'failed', last_message = ? WHERE task_name = 'bot_article_queue'")->execute([mb_substr($exception->getMessage(), 0, 500)]);
+        } catch (Throwable) {
+        }
+    }
+}
+
 function run_traffic_scheduler(PDO $pdo): void
 {
+    run_bot_scheduler($pdo);
     if (INDEXNOW_KEY === '') {
         return;
     }
@@ -502,7 +685,7 @@ function run_traffic_scheduler(PDO $pdo): void
             return;
         }
         $started = gmdate('Y-m-d H:i:s');
-        $urls = [site_url('/'), site_url('/sitemap.xml'), site_url('/sitemap-images.xml'), site_url('/feed.xml'), site_url('/categories')];
+        $urls = [site_url('/'), site_url('/community'), site_url('/policies'), site_url('/sitemap.xml'), site_url('/sitemap-images.xml'), site_url('/feed.xml'), site_url('/categories')];
         $articles = $pdo->query("SELECT slug FROM articles WHERE status = 'published' ORDER BY updated_at DESC LIMIT 9900")->fetchAll(PDO::FETCH_COLUMN);
         foreach ($articles as $slug) {
             $urls[] = site_url('/wiki/' . rawurlencode((string) $slug));

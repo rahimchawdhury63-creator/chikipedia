@@ -11,6 +11,11 @@ if (!$article || !article_is_visible($article)) {
     flash('error', 'That article could not be found.');
     redirect('/');
 }
+if (!can_edit_article($pdo, $article)) {
+    $protection = active_article_protection($pdo, (int) $article['id']);
+    flash('error', 'This article is administrator-protected' . ($protection && $protection['reason'] ? ': ' . $protection['reason'] : '.') );
+    redirect('/wiki/' . rawurlencode($article['slug']));
+}
 
 $error = '';
 $articleId = (int) $article['id'];
@@ -87,25 +92,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($error === '') {
         $status = $article['status'] === 'published' ? 'published' : ($canPublish ? 'published' : 'pending');
+        $destinationSlug = $sourceTitle !== $article['title'] ? unique_slug($pdo, $sourceTitle, $articleId) : $articleSlug;
         $summary = $sourceSummary ?: 'Improved article';
         preg_match('/\[\[(?:File|Image|চিত্র):\s*(https:\/\/[^\]|]+)/iu', $sourceContent, $imageMatch);
         $featuredImage = $imageMatch[1] ?? $article['featured_image'];
         try {
             $pdo->beginTransaction();
-            $update = $pdo->prepare('UPDATE articles SET title = ?, content = ?, excerpt = ?, status = ?, featured_image = ?, seo_title = ?, seo_description = ?, edit_count = edit_count + 1, score = (views + likes * 6 + (edit_count + 1) * 2) / GREATEST(DATEDIFF(UTC_TIMESTAMP(), created_at) + 1, 1), published_at = COALESCE(published_at, ?), updated_at = UTC_TIMESTAMP() WHERE id = ?');
-            $update->execute([$sourceTitle, $sourceContent, excerpt($sourceContent, 220), $status, $featuredImage, $sourceSeoTitle ?: null, $sourceSeoDescription ?: null, $status === 'published' ? gmdate('Y-m-d H:i:s') : null, $articleId]);
+            $update = $pdo->prepare('UPDATE articles SET title = ?, slug = ?, content = ?, excerpt = ?, status = ?, featured_image = ?, seo_title = ?, seo_description = ?, edit_count = edit_count + 1, score = (views + likes * 6 + (edit_count + 1) * 2) / GREATEST(DATEDIFF(UTC_TIMESTAMP(), created_at) + 1, 1), published_at = COALESCE(published_at, ?), updated_at = UTC_TIMESTAMP() WHERE id = ?');
+            $update->execute([$sourceTitle, $destinationSlug, $sourceContent, excerpt($sourceContent, 220), $status, $featuredImage, $sourceSeoTitle ?: null, $sourceSeoDescription ?: null, $status === 'published' ? gmdate('Y-m-d H:i:s') : null, $articleId]);
+            if ($destinationSlug !== $articleSlug) {
+                $pdo->prepare('INSERT INTO page_redirects (source_slug, target_article_id, created_by) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE target_article_id = VALUES(target_article_id), created_by = VALUES(created_by)')->execute([$articleSlug, $articleId, current_user()['id']]);
+                $pdo->prepare('DELETE FROM page_redirects WHERE source_slug = ?')->execute([$destinationSlug]);
+            }
             $revision = $pdo->prepare('INSERT INTO revisions (article_id, user_id, title, content, edit_summary, is_minor) VALUES (?, ?, ?, ?, ?, ?)');
             $revision->execute([$articleId, current_user()['id'], $sourceTitle, $sourceContent, $summary, !empty($_POST['is_minor']) ? 1 : 0]);
             sync_article_categories($pdo, $articleId, extract_categories($sourceContent));
             sync_search_document($pdo, $articleId);
+            sync_article_links($pdo, $articleId, $sourceContent);
             attach_remote_import($pdo, $sourceImportId, $articleId, (int) current_user()['id']);
             $pdo->prepare('DELETE FROM drafts WHERE user_id = ? AND article_id = ?')->execute([current_user()['id'], $articleId]);
             $pdo->commit();
-            log_activity($pdo, 'article.edited', 'article', $articleId, ['summary' => $summary]);
+            log_activity($pdo, 'article.edited', 'article', $articleId, ['summary' => $summary, 'old_slug' => $articleSlug, 'new_slug' => $destinationSlug]);
             if ($status === 'published') {
-                notify_indexnow([site_url('/wiki/' . $articleSlug), site_url('/feed.xml')]);
-                flash('success', 'Your changes are now live.');
-                redirect('/wiki/' . rawurlencode($articleSlug));
+                notify_indexnow([site_url('/wiki/' . $destinationSlug), site_url('/wiki/' . $articleSlug), site_url('/feed.xml')]);
+                flash('success', $destinationSlug !== $articleSlug ? 'Your changes are live and the former title now redirects here.' : 'Your changes are now live.');
+                redirect('/wiki/' . rawurlencode($destinationSlug));
             }
             flash('success', 'Your changes were submitted for moderator review.');
             redirect('/drafts');

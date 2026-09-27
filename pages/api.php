@@ -18,7 +18,8 @@ if ($action === 'search') {
         'excerpt' => excerpt($row['excerpt'] ?: $row['content'], 95),
         'category' => $row['category_name'] ?? null,
     ], $search['results']);
-    echo json_encode(['results' => $results, 'total' => $search['total']], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    $alternatives = $search['total'] < 3 ? array_map(static fn(array $row): array => ['title' => $row['title'], 'slug' => $row['slug']], search_title_suggestions($pdo, $query, 4)) : [];
+    echo json_encode(['results' => $results, 'total' => $search['total'], 'suggestions' => $alternatives], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     exit;
 }
 
@@ -125,11 +126,17 @@ if ($action === 'autosave') {
         exit;
     }
     if ($articleId > 0) {
-        $articleStmt = $pdo->prepare('SELECT id FROM articles WHERE id = ? LIMIT 1');
+        $articleStmt = $pdo->prepare('SELECT * FROM articles WHERE id = ? LIMIT 1');
         $articleStmt->execute([$articleId]);
-        if (!$articleStmt->fetchColumn()) {
+        $autosaveArticle = $articleStmt->fetch();
+        if (!$autosaveArticle) {
             http_response_code(404);
             echo json_encode(['error' => 'Article not found.']);
+            exit;
+        }
+        if (!can_edit_article($pdo, $autosaveArticle)) {
+            http_response_code(423);
+            echo json_encode(['error' => 'This article is administrator-protected.']);
             exit;
         }
         $draftStmt = $pdo->prepare('SELECT id FROM drafts WHERE user_id = ? AND article_id = ? ORDER BY updated_at DESC LIMIT 1');

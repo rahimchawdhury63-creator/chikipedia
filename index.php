@@ -46,7 +46,7 @@ require APP_ROOT . '/includes/header.php';
 
     <div class="home-content">
         <?php if ($notice = setting($pdo, 'homepage_notice', '')): ?>
-            <div class="home-notice"><span><strong>Community notice:</strong> <?= e($notice) ?></span><a href="/wiki/community-portal">Learn more →</a></div>
+            <div class="home-notice"><span><strong>Community notice:</strong> <?= e($notice) ?></span><a href="/community">Visit community portal →</a></div>
         <?php endif; ?>
 
         <?php if ($featured): ?>

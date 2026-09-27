@@ -15,7 +15,7 @@ function run_migrations(PDO $pdo): void
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
     $version = (int) ($pdo->query("SELECT setting_value FROM settings WHERE setting_key = 'schema_version'")->fetchColumn() ?: 0);
-    if ($version >= 7) {
+    if ($version >= 8) {
         return;
     }
 
@@ -48,6 +48,7 @@ function run_migrations(PDO $pdo): void
         edit_count INT UNSIGNED NOT NULL DEFAULT 0,
         score DECIMAL(14,4) NOT NULL DEFAULT 0,
         is_featured TINYINT(1) NOT NULL DEFAULT 0,
+        created_by_bot_id BIGINT UNSIGNED NULL,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         published_at DATETIME NULL,
@@ -177,6 +178,7 @@ function run_migrations(PDO $pdo): void
         popularity_score DECIMAL(12,3) NOT NULL DEFAULT 0,
         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         FULLTEXT KEY ft_search_document (title, normalized_title, body),
+        INDEX idx_search_title (normalized_title(190), updated_at),
         INDEX idx_search_quality (quality_score, popularity_score)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
@@ -274,6 +276,94 @@ function run_migrations(PDO $pdo): void
         INDEX idx_attribution_source (source_url(190))
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
+    $pdo->exec("CREATE TABLE IF NOT EXISTS article_protections (
+        article_id BIGINT UNSIGNED PRIMARY KEY,
+        protection_level VARCHAR(30) NOT NULL DEFAULT 'administrator',
+        reason VARCHAR(500) NOT NULL,
+        protected_by BIGINT UNSIGNED NOT NULL,
+        expires_at DATETIME NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_protection_expiry (expires_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+    $pdo->exec("CREATE TABLE IF NOT EXISTS protection_log (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        article_id BIGINT UNSIGNED NOT NULL,
+        administrator_id BIGINT UNSIGNED NOT NULL,
+        action VARCHAR(30) NOT NULL,
+        reason VARCHAR(500) NULL,
+        expires_at DATETIME NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_protection_log_article (article_id, created_at),
+        INDEX idx_protection_log_admin (administrator_id, created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+    $pdo->exec("CREATE TABLE IF NOT EXISTS bots (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(80) NOT NULL,
+        slug VARCHAR(100) NOT NULL UNIQUE,
+        description VARCHAR(500) NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'active',
+        created_by BIGINT UNSIGNED NULL,
+        daily_limit INT UNSIGNED NOT NULL DEFAULT 25,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_bot_status (status)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+    $pdo->exec("CREATE TABLE IF NOT EXISTS bot_jobs (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        bot_id BIGINT UNSIGNED NOT NULL,
+        requested_by BIGINT UNSIGNED NOT NULL,
+        title VARCHAR(255) NOT NULL,
+        payload_json MEDIUMTEXT NOT NULL,
+        publication_mode VARCHAR(20) NOT NULL DEFAULT 'pending',
+        status VARCHAR(20) NOT NULL DEFAULT 'queued',
+        article_id BIGINT UNSIGNED NULL,
+        error_message VARCHAR(500) NULL,
+        scheduled_for DATETIME NOT NULL,
+        attempts TINYINT UNSIGNED NOT NULL DEFAULT 0,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        started_at DATETIME NULL,
+        completed_at DATETIME NULL,
+        INDEX idx_bot_job_due (status, scheduled_for),
+        INDEX idx_bot_job_bot_time (bot_id, created_at),
+        INDEX idx_bot_job_requester (requested_by, created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+    $pdo->exec("CREATE TABLE IF NOT EXISTS bot_runs (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        bot_id BIGINT UNSIGNED NOT NULL,
+        job_id BIGINT UNSIGNED NULL,
+        status VARCHAR(20) NOT NULL,
+        message VARCHAR(500) NULL,
+        started_at DATETIME NOT NULL,
+        finished_at DATETIME NULL,
+        INDEX idx_bot_run_bot_time (bot_id, started_at),
+        INDEX idx_bot_run_status (status, started_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+    $pdo->exec("CREATE TABLE IF NOT EXISTS page_redirects (
+        source_slug VARCHAR(190) PRIMARY KEY,
+        target_article_id BIGINT UNSIGNED NOT NULL,
+        created_by BIGINT UNSIGNED NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_redirect_target (target_article_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+    $pdo->exec("CREATE TABLE IF NOT EXISTS article_links (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        source_article_id BIGINT UNSIGNED NOT NULL,
+        target_article_id BIGINT UNSIGNED NULL,
+        target_title VARCHAR(255) NOT NULL,
+        target_key CHAR(64) NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_article_link (source_article_id, target_key),
+        INDEX idx_link_target (target_article_id, source_article_id),
+        INDEX idx_link_missing (target_article_id, created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
     // Upgrade the original BanglaVerseWiki tables without destroying existing data.
     $columns = [
         'users' => [
@@ -295,6 +385,7 @@ function run_migrations(PDO $pdo): void
             'edit_count' => 'INT UNSIGNED NOT NULL DEFAULT 0',
             'score' => 'DECIMAL(14,4) NOT NULL DEFAULT 0',
             'is_featured' => 'TINYINT(1) NOT NULL DEFAULT 0',
+            'created_by_bot_id' => 'BIGINT UNSIGNED NULL',
             'updated_at' => 'TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP',
             'published_at' => 'DATETIME NULL',
         ],
@@ -327,6 +418,9 @@ function run_migrations(PDO $pdo): void
     if (!database_index_exists($pdo, 'activity_log', 'idx_activity_user_action_time')) {
         $pdo->exec('ALTER TABLE activity_log ADD INDEX idx_activity_user_action_time (user_id, action, created_at)');
     }
+    if (!database_index_exists($pdo, 'search_documents', 'idx_search_title')) {
+        $pdo->exec('ALTER TABLE search_documents ADD INDEX idx_search_title (normalized_title(190), updated_at)');
+    }
 
     // Preserve attribution and publication dates when upgrading the original schema.
     $pdo->exec("UPDATE articles a SET a.author_id = (SELECT r.user_id FROM revisions r WHERE r.article_id = a.id ORDER BY r.id ASC LIMIT 1) WHERE a.author_id IS NULL");
@@ -346,14 +440,18 @@ function run_migrations(PDO $pdo): void
         'default_meta_description' => 'BanglaVerseWiki is a free, community-built encyclopedia for Bengali knowledge, culture, history and ideas.',
         'remote_import_enabled' => '1',
         'indexnow_interval_minutes' => '50',
-        'schema_version' => '7',
+        'bot_scheduler_enabled' => '1',
+        'bot_default_mode' => 'pending',
+        'schema_version' => '8',
     ];
-    $insert = $pdo->prepare('INSERT IGNORE INTO settings (setting_key, setting_value, is_public) VALUES (?, ?, 1)');
+    $insert = $pdo->prepare('INSERT IGNORE INTO settings (setting_key, setting_value, is_public) VALUES (?, ?, ?)');
+    $privateSettings = ['bot_scheduler_enabled', 'bot_default_mode', 'schema_version'];
     foreach ($defaults as $key => $value) {
-        $insert->execute([$key, $value]);
+        $insert->execute([$key, $value, in_array($key, $privateSettings, true) ? 0 : 1]);
     }
-    $pdo->prepare("UPDATE settings SET setting_value = '7' WHERE setting_key = 'schema_version'")->execute();
-    $pdo->exec("INSERT IGNORE INTO scheduled_tasks (task_name, interval_seconds, next_run_at, status) VALUES ('indexnow_full_refresh', 3000, UTC_TIMESTAMP(), 'idle')");
+    $pdo->prepare("UPDATE settings SET setting_value = '8' WHERE setting_key = 'schema_version'")->execute();
+    $pdo->exec("INSERT IGNORE INTO bots (id, name, slug, description, status, daily_limit) VALUES (1, 'BanglaVerseBot', 'banglaversebot', 'Creates administrator-approved, source-backed structured encyclopedia drafts and articles.', 'active', 25)");
+    $pdo->exec("INSERT IGNORE INTO scheduled_tasks (task_name, interval_seconds, next_run_at, status) VALUES ('indexnow_full_refresh', 3000, UTC_TIMESTAMP(), 'idle'), ('bot_article_queue', 300, UTC_TIMESTAMP(), 'idle')");
 }
 
 function reset_content_if_requested(PDO $pdo): void
@@ -362,16 +460,17 @@ function reset_content_if_requested(PDO $pdo): void
         return;
     }
     $tables = [
-        'article_attributions', 'article_categories', 'article_likes', 'discussions', 'drafts',
-        'watchlist', 'reports', 'revisions', 'search_documents', 'search_queries', 'remote_imports',
-        'media_sources', 'images', 'activity_log', 'indexing_submissions', 'articles', 'categories',
+        'article_attributions', 'article_links', 'article_protections', 'protection_log', 'page_redirects',
+        'article_categories', 'article_likes', 'discussions', 'drafts', 'watchlist', 'reports', 'revisions',
+        'search_documents', 'search_queries', 'remote_imports', 'media_sources', 'images', 'activity_log',
+        'indexing_submissions', 'bot_runs', 'bot_jobs', 'articles', 'categories',
     ];
     try {
         $pdo->beginTransaction();
         foreach ($tables as $table) {
             $pdo->exec("DELETE FROM `{$table}`");
         }
-        $pdo->exec("UPDATE scheduled_tasks SET next_run_at = UTC_TIMESTAMP(), locked_at = NULL, last_started_at = NULL, last_finished_at = NULL, status = 'idle', last_message = 'Fresh encyclopedia initialized.', run_count = 0 WHERE task_name = 'indexnow_full_refresh'");
+        $pdo->exec("UPDATE scheduled_tasks SET next_run_at = UTC_TIMESTAMP(), locked_at = NULL, last_started_at = NULL, last_finished_at = NULL, status = 'idle', last_message = 'Fresh encyclopedia initialized.', run_count = 0 WHERE task_name IN ('indexnow_full_refresh', 'bot_article_queue')");
         $pdo->prepare("INSERT INTO settings (setting_key, setting_value, is_public) VALUES ('fresh_content_reset_v1', UTC_TIMESTAMP(), 0) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)")->execute();
         $pdo->commit();
     } catch (Throwable $exception) {

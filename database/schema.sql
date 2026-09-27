@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS articles (
  featured_image VARCHAR(1000) NULL, seo_title VARCHAR(255) NULL, seo_description VARCHAR(320) NULL,
  views BIGINT UNSIGNED NOT NULL DEFAULT 0, likes BIGINT UNSIGNED NOT NULL DEFAULT 0,
  edit_count INT UNSIGNED NOT NULL DEFAULT 0, score DECIMAL(14,4) NOT NULL DEFAULT 0, is_featured TINYINT(1) NOT NULL DEFAULT 0,
+ created_by_bot_id BIGINT UNSIGNED NULL,
  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
  published_at DATETIME NULL, INDEX idx_articles_status_updated (status, updated_at), INDEX idx_articles_score (score),
  FULLTEXT KEY ft_articles_search (title, content)
@@ -86,7 +87,8 @@ CREATE TABLE IF NOT EXISTS search_documents (
  body MEDIUMTEXT NOT NULL, excerpt TEXT NULL, language VARCHAR(12) NOT NULL DEFAULT 'bn',
  quality_score DECIMAL(8,3) NOT NULL DEFAULT 0, popularity_score DECIMAL(12,3) NOT NULL DEFAULT 0,
  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
- FULLTEXT KEY ft_search_document (title, normalized_title, body), INDEX idx_search_quality (quality_score, popularity_score)
+ FULLTEXT KEY ft_search_document (title, normalized_title, body), INDEX idx_search_title (normalized_title(190), updated_at),
+ INDEX idx_search_quality (quality_score, popularity_score)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE TABLE IF NOT EXISTS search_queries (
  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, query_text VARCHAR(190) NOT NULL, normalized_query VARCHAR(190) NOT NULL,
@@ -130,16 +132,62 @@ CREATE TABLE IF NOT EXISTS article_attributions (
  source_title VARCHAR(255) NULL, license_name VARCHAR(100) NULL, attribution_text VARCHAR(1000) NULL,
  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, INDEX idx_attribution_article (article_id), INDEX idx_attribution_source (source_url(190))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS article_protections (
+ article_id BIGINT UNSIGNED PRIMARY KEY, protection_level VARCHAR(30) NOT NULL DEFAULT 'administrator',
+ reason VARCHAR(500) NOT NULL, protected_by BIGINT UNSIGNED NOT NULL, expires_at DATETIME NULL,
+ created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+ INDEX idx_protection_expiry (expires_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS protection_log (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, article_id BIGINT UNSIGNED NOT NULL, administrator_id BIGINT UNSIGNED NOT NULL,
+ action VARCHAR(30) NOT NULL, reason VARCHAR(500) NULL, expires_at DATETIME NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ INDEX idx_protection_log_article (article_id, created_at), INDEX idx_protection_log_admin (administrator_id, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS bots (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, name VARCHAR(80) NOT NULL, slug VARCHAR(100) NOT NULL UNIQUE,
+ description VARCHAR(500) NULL, status VARCHAR(20) NOT NULL DEFAULT 'active', created_by BIGINT UNSIGNED NULL,
+ daily_limit INT UNSIGNED NOT NULL DEFAULT 25, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+ INDEX idx_bot_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS bot_jobs (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, bot_id BIGINT UNSIGNED NOT NULL, requested_by BIGINT UNSIGNED NOT NULL,
+ title VARCHAR(255) NOT NULL, payload_json MEDIUMTEXT NOT NULL, publication_mode VARCHAR(20) NOT NULL DEFAULT 'pending',
+ status VARCHAR(20) NOT NULL DEFAULT 'queued', article_id BIGINT UNSIGNED NULL, error_message VARCHAR(500) NULL,
+ scheduled_for DATETIME NOT NULL, attempts TINYINT UNSIGNED NOT NULL DEFAULT 0,
+ created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, started_at DATETIME NULL, completed_at DATETIME NULL,
+ INDEX idx_bot_job_due (status, scheduled_for), INDEX idx_bot_job_bot_time (bot_id, created_at), INDEX idx_bot_job_requester (requested_by, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS bot_runs (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, bot_id BIGINT UNSIGNED NOT NULL, job_id BIGINT UNSIGNED NULL,
+ status VARCHAR(20) NOT NULL, message VARCHAR(500) NULL, started_at DATETIME NOT NULL, finished_at DATETIME NULL,
+ INDEX idx_bot_run_bot_time (bot_id, started_at), INDEX idx_bot_run_status (status, started_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS page_redirects (
+ source_slug VARCHAR(190) PRIMARY KEY, target_article_id BIGINT UNSIGNED NOT NULL, created_by BIGINT UNSIGNED NULL,
+ created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, INDEX idx_redirect_target (target_article_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS article_links (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, source_article_id BIGINT UNSIGNED NOT NULL, target_article_id BIGINT UNSIGNED NULL,
+ target_title VARCHAR(255) NOT NULL, target_key CHAR(64) NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE KEY uq_article_link (source_article_id, target_key), INDEX idx_link_target (target_article_id, source_article_id),
+ INDEX idx_link_missing (target_article_id, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+INSERT IGNORE INTO bots (id, name, slug, description, status, daily_limit)
+VALUES (1, 'BanglaVerseBot', 'banglaversebot', 'Creates administrator-approved, source-backed structured encyclopedia drafts and articles.', 'active', 25);
 
 INSERT IGNORE INTO settings (setting_key, setting_value, is_public) VALUES
  ('site_tagline', 'A free, community-built encyclopedia for everyone.', 1),
  ('homepage_notice', '', 1), ('allow_registration', '1', 1), ('require_review', '0', 1),
  ('default_meta_description', 'BanglaVerseWiki is a free, community-built encyclopedia for Bengali knowledge, culture, history and ideas.', 1),
  ('remote_import_enabled', '1', 1), ('indexnow_interval_minutes', '50', 1),
- ('schema_version', '7', 0);
+ ('bot_scheduler_enabled', '1', 0), ('bot_default_mode', 'pending', 0),
+ ('schema_version', '8', 0);
 
-INSERT IGNORE INTO scheduled_tasks (task_name, interval_seconds, next_run_at, status)
-VALUES ('indexnow_full_refresh', 3000, UTC_TIMESTAMP(), 'idle');
+INSERT IGNORE INTO scheduled_tasks (task_name, interval_seconds, next_run_at, status) VALUES
+ ('indexnow_full_refresh', 3000, UTC_TIMESTAMP(), 'idle'),
+ ('bot_article_queue', 300, UTC_TIMESTAMP(), 'idle');
 
 INSERT INTO search_documents (article_id, title, normalized_title, body, excerpt, language, quality_score, popularity_score, updated_at)
 SELECT id, title, LOWER(title), content, excerpt, 'bn',

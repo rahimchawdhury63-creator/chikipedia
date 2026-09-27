@@ -8,15 +8,15 @@ declare(strict_types=1);
             <p>Knowledge grows when it is shared. Built by readers and editors, for everyone.</p>
         </div>
         <div><strong>Explore</strong><a href="/special/recent">Recent changes</a><a href="/special/popular">Popular pages</a><a href="/categories">Categories</a><a href="/feed.xml">RSS feed</a></div>
-        <div><strong>Contribute</strong><a href="/create">Create an article</a><a href="/wiki/help-editing">Editing guide</a><a href="/wiki/community-guidelines">Community guidelines</a><a href="mailto:rrc@bsdc.info.bd">Contact</a></div>
-        <div><strong>Platform</strong><a href="/wiki/about-banglaversewiki">About</a><a href="/wiki/privacy-policy">Privacy</a><a href="/sitemap.xml">Sitemap</a><a href="/wiki/disclaimer">Disclaimer</a></div>
+        <div><strong>Contribute</strong><a href="/create">Create an article</a><a href="/community">Community portal</a><a href="/policy/editing-style">Editing guide</a><a href="/policy/civility">Community conduct</a></div>
+        <div><strong>Policies</strong><a href="/policies">All policies</a><a href="/policy/privacy">Privacy</a><a href="/policy/copyright-licensing">Copyright</a><a href="mailto:rrc@bsdc.info.bd">Contact administration</a></div>
     </div>
     <div class="footer-bottom">
         <span>© <?= date('Y') ?> <?= e(SITE_NAME) ?>. Content is contributed by the community.</span>
         <span>Fast · Accessible · Open knowledge</span>
     </div>
 </footer>
-<script src="/assets/js/app.js?v=5" defer></script>
+<script src="/assets/js/app.js?v=6" defer></script>
 <?php if (!empty($page_scripts) && is_array($page_scripts)): foreach ($page_scripts as $script): ?>
 <script src="<?= e($script) ?>" defer></script>
 <?php endforeach; endif; ?>

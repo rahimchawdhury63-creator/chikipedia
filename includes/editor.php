@@ -1,12 +1,12 @@
 <?php
 declare(strict_types=1);
-$page_scripts = ['/assets/js/editor.js?v=5'];
+$page_scripts = ['/assets/js/editor.js?v=6'];
 $page_robots = 'noindex,nofollow';
 require APP_ROOT . '/includes/header.php';
 ?>
 <main id="main-content" class="editor-page">
     <header class="editor-header">
-        <div><span class="eyebrow">Source editor</span><h1><?= e($editorTitle) ?></h1><p>Use wiki markup, cite reliable sources, and preview before saving.</p></div>
+        <div><span class="eyebrow">Visual + source editor</span><h1><?= e($editorTitle) ?></h1><p>Edit visually or use MediaWiki-style source. Both modes share one autosaved, revisioned article.</p></div>
         <a class="button" href="<?= $articleId ? '/wiki/' . e($articleSlug) : '/' ?>">Cancel</a>
     </header>
     <?php if ($error): ?><div class="form-error" role="alert"><?= e($error) ?></div><?php endif; ?>
@@ -21,31 +21,38 @@ require APP_ROOT . '/includes/header.php';
         <div class="editor-shell">
             <div class="editor-toolbar" role="toolbar" aria-label="Wiki formatting">
                 <div class="toolbar-group">
-                    <button type="button" title="Bold" data-wrap="'''|'''"><strong>B</strong></button>
-                    <button type="button" title="Italic" data-wrap="''|''"><em>I</em></button>
-                    <button type="button" title="Internal link" data-wrap="[[|]]">Link</button>
-                    <button type="button" title="External link" data-wrap="[https://example.com |]">↗</button>
+                    <button type="button" title="Bold" data-wrap="'''|'''" data-visual-command="bold"><strong>B</strong></button>
+                    <button type="button" title="Italic" data-wrap="''|''" data-visual-command="italic"><em>I</em></button>
+                    <button type="button" title="Internal wiki link" data-wrap="[[|]]" data-visual-action="internal-link">Link</button>
+                    <button type="button" title="External source link" data-wrap="[https://example.com |]" data-visual-action="external-link">↗</button>
                 </div>
                 <div class="toolbar-group">
-                    <button type="button" title="Heading" data-line="== | ==">H2</button>
-                    <button type="button" title="Bulleted list" data-line="* |">• List</button>
-                    <button type="button" title="Numbered list" data-line="# |">1. List</button>
-                    <button type="button" title="Quote" data-template="{{Quote|Quoted text|Source}}">“ ”</button>
+                    <button type="button" title="Section heading" data-line="== | ==" data-visual-block="h2">H2</button>
+                    <button type="button" title="Bulleted list" data-line="* |" data-visual-command="insertUnorderedList">• List</button>
+                    <button type="button" title="Numbered list" data-line="# |" data-visual-command="insertOrderedList">1. List</button>
+                    <button type="button" title="Quote" data-template="{{Quote|Quoted text|Source}}" data-visual-action="quote">“ ”</button>
                 </div>
                 <div class="toolbar-group">
-                    <button type="button" title="Citation" data-wrap="<ref>|</ref>">Cite</button>
-                    <button type="button" title="Infobox" data-template="{{Infobox\n| title = Article title\n| image = \n| caption = \n| type = \n| location = \n}}">Info</button>
-                    <button type="button" title="Table" data-template="{|\n|+ Table title\n|-\n! Heading 1 !! Heading 2\n|-\n| Cell 1 || Cell 2\n|}">Table</button>
+                    <button type="button" title="Citation" data-wrap="<ref>|</ref>" data-visual-action="citation">Cite</button>
+                    <button type="button" title="Infobox" data-template="{{Infobox\n| title = Article title\n| image = \n| caption = \n| type = \n| location = \n}}" data-visual-action="template">Info</button>
+                    <button type="button" title="Table" data-template="{|\n|+ Table title\n|-\n! Heading 1 !! Heading 2\n|-\n| Cell 1 || Cell 2\n|}" data-visual-action="template">Table</button>
                     <button type="button" title="Upload image" data-image-upload>Image</button>
                     <button type="button" title="Import a licensed encyclopedia article and transfer its reusable images to ImgBB" data-article-import>Import</button>
                 </div>
+                <div class="toolbar-group editor-history-tools">
+                    <button type="button" title="Undo" data-editor-history="undo">↶</button>
+                    <button type="button" title="Redo" data-editor-history="redo">↷</button>
+                    <button type="button" title="Remove formatting" data-action="clear-formatting" data-visual-command="removeFormat">Clear</button>
+                </div>
                 <div class="editor-tabs" role="tablist">
+                    <button type="button" role="tab" aria-selected="false" data-editor-tab="visual">Visual</button>
                     <button class="active" type="button" role="tab" aria-selected="true" data-editor-tab="source">Source</button>
                     <button type="button" role="tab" aria-selected="false" data-editor-tab="split">Split</button>
                     <button type="button" role="tab" aria-selected="false" data-editor-tab="preview">Preview</button>
                 </div>
             </div>
             <div class="editor-workspace" data-editor-workspace>
+                <div class="visual-editor wiki-content" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Visual article editor" data-visual-editor hidden></div>
                 <textarea class="wiki-editor" id="wiki-source" name="content" spellcheck="true" data-wiki-editor placeholder="Start with a short lead paragraph.&#10;&#10;== History ==&#10;Write a well-sourced section here.<ref>Source title, publisher, date, URL</ref>&#10;&#10;[[Category:Knowledge]]"><?= e($sourceContent) ?></textarea>
                 <div class="editor-preview wiki-content" data-editor-preview hidden><p class="empty-state">Your formatted preview will appear here.</p></div>
             </div>
@@ -69,11 +76,12 @@ require APP_ROOT . '/includes/header.php';
             <aside class="panel editor-help">
                 <div class="panel-header"><h2>Wiki markup guide</h2></div>
                 <div class="panel-body">
-                    <details open><summary>Text &amp; sections</summary><p><span class="syntax-chip">'''bold'''</span> · <span class="syntax-chip">''italic''</span><br><span class="syntax-chip">== Section heading ==</span></p></details>
+                    <details open><summary>Visual and source modes</summary><p>Visual mode handles everyday formatting. Blue source capsules preserve citations, templates, tables, categories, and media exactly; double-click or press Enter on a capsule to edit its wiki code.</p></details>
+                    <details><summary>Text &amp; sections</summary><p><span class="syntax-chip">'''bold'''</span> · <span class="syntax-chip">''italic''</span><br><span class="syntax-chip">== Section heading ==</span></p></details>
                     <details><summary>Links &amp; media</summary><p><span class="syntax-chip">[[Article|label]]</span><br><span class="syntax-chip">[https://site.tld label]</span><br>Use the Image button to upload to ImgBB and insert the correct file code.</p></details>
                     <details><summary>Sources</summary><p>Add citations after a claim: <span class="syntax-chip">&lt;ref&gt;Reliable source details&lt;/ref&gt;</span>. References are listed automatically.</p></details>
                     <details><summary>Categories &amp; templates</summary><p><span class="syntax-chip">[[Category:History]]</span><br><span class="syntax-chip">{{Note|Useful context}}</span></p></details>
-                    <p><a href="/wiki/help-editing" target="_blank">Open the full editing guide ↗</a></p>
+                    <p><a href="/policy/editing-style" target="_blank">Open the full editing guide ↗</a> · <a href="/policy/copyright-licensing" target="_blank">Copyright rules ↗</a></p>
                 </div>
             </aside>
         </div>

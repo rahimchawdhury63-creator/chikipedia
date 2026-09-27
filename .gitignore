@@ -8,6 +8,9 @@
 /storage/logs/*
 !/storage/logs/.gitkeep
 
+# Local validation dependencies
+node_modules/
+
 # Editor/OS
 .DS_Store
 .idea/

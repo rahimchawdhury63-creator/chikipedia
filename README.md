@@ -1,17 +1,21 @@
-# BanglaVerseWiki 4
+# BanglaVerseWiki 5
 
 A modern, dependency-free Wikipedia-style publishing platform for free PHP/MySQL shared hosting. It uses plain PHP 8.1+, MySQL/MariaDB, CSS, and JavaScript—no Composer, Node build, paid search service, or paid editor is required.
 
 ## What is included
 
-- MediaWiki-style source editor with live preview, toolbar, keyboard shortcuts, browser recovery, and server-side private autosave
+- Integrated visual and MediaWiki-style source editing with loss-aware round trips, protected source capsules for templates/citations/tables/media, split preview, toolbar, keyboard shortcuts, browser recovery, and server-side private autosave
 - Licensed encyclopedia importer for Wikipedia/MediaWiki and other public HTTPS encyclopedias, with source attribution, license records, SSRF protection, automatic bounded image discovery, and mandatory ImgBB transfer
 - Rich-paste image detection: pasting licensed wiki HTML keeps the text and offers to fetch up to three detected images, re-host them on ImgBB, and store their provenance automatically
 - Safe wiki parser: headings, bold/italic, internal/external links, lists, citations and automatic references, images, categories, tables, infoboxes, notes, warnings, quotes, and hatnotes
 - Revision history, line-by-line diff, rollback, edit summaries, minor edits, conflict detection, and transparent recent changes
 - Drafts, review workflow, featured pages, discussions, likes, watchlists, profiles, categories, search, random pages, and trending ranking
 - Responsive, accessible Wikipedia-inspired interface optimized from 280 px mobile screens through ultrawide desktops, plus dark mode and print styles
-- Administrator control center for article moderation, roles, user blocking, site settings, media, reports, search intelligence, health checks, and activity auditing
+- Administrator control center for article moderation, administrator-only protection, roles, user blocking, site settings, media, reports, bot jobs, search intelligence, health checks, and activity auditing
+- Complete community portal with editing tasks, wanted pages from the internal-link graph, recent activity, talk activity, active editors, knowledge gaps, governance links, and automation transparency
+- Original policy library covering core content standards, sourcing, living people, copyright, conduct, consensus, disputes, deletion, protection, privacy, administrator accountability, and bot governance
+- Audited BanglaVerseBot queue that deterministically structures administrator-supplied facts and HTTPS sources as draft, pending-review, or explicitly published articles with scheduling and daily safety limits
+- Administrator-only page protection with expiry, reasons, visible notices, enforcement across edit/autosave/rollback, and an immutable protection log
 - Smart hybrid search with exact/prefix matching, MySQL FULLTEXT relevance, popularity/freshness/quality weighting, live suggestions, synonym expansion, zero-result opportunities, and private aggregate analytics
 - Technical SEO: per-page canonical/meta/Open Graph/Twitter tags, Article/Profile/Collection/Breadcrumb/SearchAction/SearchResultsPage JSON-LD, dynamic split sitemaps, RSS, semantic HTML, contextual internal links, clean URLs, robots rules, and fast dependency-free assets
 - Pure-PHP IndexNow automation: publication events submit immediately, while a database-leased traffic scheduler refreshes discovery endpoints and a bounded public-URL batch every 50 minutes without cron, workers, or daemons
@@ -38,7 +42,7 @@ A modern, dependency-free Wikipedia-style publishing platform for free PHP/MySQL
 6. Create the first administrator using one of these secure options:
    - Preferred: set `admin_bootstrap_email` and a bcrypt `admin_bootstrap_password_hash` in `config/local.php`. The deployment workflow uses this method, so no plaintext administrator password is placed on the server; or
    - Open `/setup` immediately after deployment. It is available only until the first administrator exists. Use `rrc@bsdc.info.bd` and the private password supplied for that account.
-7. Log in, open **Administration → Site settings**, review the publishing workflow, remote imports, and IndexNow status, then change the initial administrator password policy/credentials as appropriate.
+7. Log in, open **Administration → Site settings**, review the publishing workflow, remote imports, bot scheduler, and IndexNow status, then change the initial administrator password policy/credentials as appropriate.
 8. Submit `/sitemap.xml` and `/sitemap-images.xml` in Google Search Console and Bing Webmaster Tools. Configure `indexnow_key` to enable immediate and scheduled IndexNow submissions.
 9. After HTTPS is confirmed, uncomment the HTTPS redirect block in `.htaccess`.
 
@@ -105,6 +109,20 @@ A sourced statement.<ref>Author, title, publisher, date, URL</ref>
 
 Raw user HTML is never trusted. Existing articles created by the old TinyMCE version are passed through a strict legacy HTML sanitizer while new pages use wiki source.
 
+### Visual/source round trips
+
+The **Visual** tab converts supported headings, paragraphs, emphasis, lists, links, and quotes into editable blocks. Constructs that cannot be safely represented as rich text—such as templates, references, wiki tables, categories, and ImgBB file markup—become labeled, non-executable source capsules. Double-click a capsule to edit its exact wiki source. Returning to **Source**, previewing, autosaving, or submitting serializes the visual document back to the canonical `content` field; there is no separate rich-HTML copy that can drift from article source.
+
+## Community and policy architecture
+
+`/community` is the public coordination portal. `/policies` is the policy directory, while `/policy/{slug}` renders individual, canonical, indexable standards from `includes/PolicyCatalog.php`. Wanted-page and “what links here” views use normalized `article_links` rows synchronized whenever an article is created, edited, restored, or generated by a bot. Policies are maintained as platform governance documents rather than seeded encyclopedia articles, so a fresh-content reset does not erase them.
+
+## Structured article bots and protection
+
+Only administrators can queue or control BanglaVerseBot from **Administration → Automation bots**. Jobs require a title, neutral description, and at least one HTTPS source; the deterministic service does not call generative AI or fabricate facts. The traffic-driven scheduler processes one due job under a database lease, enforces each bot's daily limit, and records the request, payload, run, result, and article provenance. Human review (`pending`) is the default.
+
+Only administrators can protect or unprotect an article and edit or restore an actively protected article. Protection has a reason and optional expiry, is visible to readers, and is recorded in `protection_log`. Protection is independent of draft/published status.
+
 ## Licensed article imports
 
 In the editor, choose **Import article**, enter a public HTTPS Wikipedia/MediaWiki or encyclopedia article URL, select the applicable reuse license, and confirm that reuse is allowed. The server fetches and converts the source into editable wiki text; it never publishes automatically. MediaWiki imports use the official API and attempt file-specific license/artist/credit lookup. Generic pages use a constrained semantic extractor. The import URL, canonical source, license, status, image transfer outcome, and errors remain visible in **Administration → Content imports**.
@@ -113,7 +131,7 @@ When formatted encyclopedia material containing images is pasted, the editor ask
 
 ## Database architecture
 
-`database/schema.sql` is the complete, importable version 7 production schema. Its 21 purposeful normalized tables cover users, articles, immutable revisions, drafts, categories, media/provenance, source attribution, imports, reactions, watchlists, discussions, reports, settings, activity auditing, search analytics, scheduled tasks, and IndexNow submission history. Composite, covering, and FULLTEXT indexes follow real query paths. The schema deliberately avoids hundreds of empty or duplicated tables: on constrained shared hosting, normalized tables and correct indexes are safer and substantially faster than artificial table-count inflation.
+`database/schema.sql` is the complete, importable version 8 production schema. Its 28 purposeful normalized tables cover users, articles, immutable revisions, drafts, categories, media/provenance, source attribution, imports, reactions, watchlists, discussions, reports, settings, activity auditing, search analytics, scheduled tasks, IndexNow history, page protection, bot jobs/runs, redirects, and the internal-link graph. Composite, covering, and FULLTEXT indexes follow real query paths. The schema deliberately avoids hundreds of empty or duplicated tables: on constrained shared hosting, normalized tables and correct indexes are safer and substantially faster than artificial table-count inflation.
 
 ## SEO and crawler automation
 

@@ -34,6 +34,70 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 }
 verify_csrf();
 
+if ($action === 'import-article') {
+    if (setting($pdo, 'remote_import_enabled', '1') !== '1') {
+        http_response_code(403);
+        echo json_encode(['error' => 'Remote imports are disabled by an administrator.']);
+        exit;
+    }
+    if (empty($_POST['rights_confirmed'])) {
+        http_response_code(422);
+        echo json_encode(['error' => 'Confirm that the source license permits reuse.']);
+        exit;
+    }
+    $rate = $pdo->prepare('SELECT COUNT(*) FROM remote_imports WHERE user_id = ? AND created_at > DATE_SUB(UTC_TIMESTAMP(), INTERVAL 1 HOUR)');
+    $rate->execute([current_user()['id']]);
+    if ((int) $rate->fetchColumn() >= 10) {
+        http_response_code(429);
+        echo json_encode(['error' => 'Remote import limit reached. Try again later.']);
+        exit;
+    }
+    require_once APP_ROOT . '/includes/ImportService.php';
+    try {
+        $result = (new ImportService($pdo))->importArticle((string) ($_POST['source_url'] ?? ''), (string) ($_POST['license'] ?? ''), (int) current_user()['id']);
+        echo json_encode($result, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    } catch (EncyclopediaImportException $exception) {
+        http_response_code(422);
+        echo json_encode(['error' => $exception->getMessage()], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
+if ($action === 'import-image') {
+    if (setting($pdo, 'remote_import_enabled', '1') !== '1' || empty($_POST['rights_confirmed'])) {
+        http_response_code(422);
+        echo json_encode(['error' => 'Confirm the image reuse rights before importing.']);
+        exit;
+    }
+    $rate = $pdo->prepare("SELECT COUNT(*) FROM activity_log WHERE user_id = ? AND action = 'image.remote_import_requested' AND created_at > DATE_SUB(UTC_TIMESTAMP(), INTERVAL 1 MINUTE)");
+    $rate->execute([current_user()['id']]);
+    if ((int) $rate->fetchColumn() >= 10) {
+        http_response_code(429);
+        echo json_encode(['error' => 'Image transfer limit reached. Wait one minute and try again.']);
+        exit;
+    }
+    require_once APP_ROOT . '/includes/ImageService.php';
+    $sourceUrl = (string) ($_POST['source_url'] ?? '');
+    log_activity($pdo, 'image.remote_import_requested', 'image', null, ['host' => parse_url($sourceUrl, PHP_URL_HOST)]);
+    try {
+        $license = in_array($_POST['license'] ?? '', ['CC BY-SA 4.0', 'CC BY-SA 3.0', 'CC0 / Public domain', 'Permission obtained', 'Reuse rights confirmed by editor'], true) ? (string) $_POST['license'] : 'Reuse rights confirmed by editor';
+        $result = (new ImageService($pdo))->importRemote($sourceUrl, (string) ($_POST['alt_text'] ?? 'Imported encyclopedia image'), [
+            'source_page_url' => (string) ($_POST['source_page_url'] ?? ''),
+            'attribution' => (string) ($_POST['attribution'] ?? ''),
+            'license_name' => $license,
+        ]);
+        echo json_encode($result, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    } catch (ImageUploadException|RemoteFetchException $exception) {
+        http_response_code(422);
+        echo json_encode(['error' => $exception->getMessage()], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $exception) {
+        error_log('Remote image import failed: ' . $exception->getMessage());
+        http_response_code(502);
+        echo json_encode(['error' => 'The remote image could not be transferred to ImgBB.']);
+    }
+    exit;
+}
+
 if ($action === 'preview') {
     require_once APP_ROOT . '/includes/WikiParser.php';
     $content = (string) ($_POST['content'] ?? '');
@@ -53,6 +117,7 @@ if ($action === 'autosave') {
     $summary = mb_substr(trim((string) ($_POST['edit_summary'] ?? '')), 0, 255);
     $seoTitle = mb_substr(trim((string) ($_POST['seo_title'] ?? '')), 0, 255);
     $seoDescription = mb_substr(trim((string) ($_POST['seo_description'] ?? '')), 0, 320);
+    $remoteImportId = max(0, (int) ($_POST['remote_import_id'] ?? 0));
     $articleId = max(0, (int) ($_POST['article_id'] ?? 0));
     if (strlen($content) > 2 * 1024 * 1024) {
         http_response_code(413);
@@ -74,9 +139,9 @@ if ($action === 'autosave') {
         $draftStmt->execute([current_user()['id']]);
     }
     if ($draftId = $draftStmt->fetchColumn()) {
-        $pdo->prepare('UPDATE drafts SET title = ?, content = ?, edit_summary = ?, seo_title = ?, seo_description = ?, updated_at = UTC_TIMESTAMP() WHERE id = ? AND user_id = ?')->execute([$title, $content, $summary, $seoTitle, $seoDescription, $draftId, current_user()['id']]);
+        $pdo->prepare('UPDATE drafts SET title = ?, content = ?, edit_summary = ?, seo_title = ?, seo_description = ?, remote_import_id = ?, updated_at = UTC_TIMESTAMP() WHERE id = ? AND user_id = ?')->execute([$title, $content, $summary, $seoTitle, $seoDescription, $remoteImportId ?: null, $draftId, current_user()['id']]);
     } else {
-        $pdo->prepare('INSERT INTO drafts (user_id, article_id, title, content, edit_summary, seo_title, seo_description) VALUES (?, ?, ?, ?, ?, ?, ?)')->execute([current_user()['id'], $articleId ?: null, $title, $content, $summary, $seoTitle, $seoDescription]);
+        $pdo->prepare('INSERT INTO drafts (user_id, article_id, title, content, edit_summary, seo_title, seo_description, remote_import_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')->execute([current_user()['id'], $articleId ?: null, $title, $content, $summary, $seoTitle, $seoDescription, $remoteImportId ?: null]);
         $draftId = $pdo->lastInsertId();
     }
     echo json_encode(['saved' => true, 'draft_id' => (int) $draftId, 'saved_at' => gmdate('c')]);

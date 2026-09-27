@@ -15,7 +15,7 @@ function run_migrations(PDO $pdo): void
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
     $version = (int) ($pdo->query("SELECT setting_value FROM settings WHERE setting_key = 'schema_version'")->fetchColumn() ?: 0);
-    if ($version >= 6) {
+    if ($version >= 7) {
         return;
     }
 
@@ -78,6 +78,7 @@ function run_migrations(PDO $pdo): void
         edit_summary VARCHAR(255) NULL,
         seo_title VARCHAR(255) NULL,
         seo_description VARCHAR(320) NULL,
+        remote_import_id BIGINT UNSIGNED NULL,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         INDEX idx_draft_user (user_id, updated_at),
@@ -161,7 +162,8 @@ function run_migrations(PDO $pdo): void
         ip_hash CHAR(64) NULL,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         INDEX idx_activity_created (created_at),
-        INDEX idx_activity_entity (entity_type, entity_id)
+        INDEX idx_activity_entity (entity_type, entity_id),
+        INDEX idx_activity_user_action_time (user_id, action, created_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
     $pdo->exec("CREATE TABLE IF NOT EXISTS search_documents (
@@ -203,6 +205,75 @@ function run_migrations(PDO $pdo): void
         INDEX idx_synonym_lookup (term, is_active)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
+    $pdo->exec("CREATE TABLE IF NOT EXISTS scheduled_tasks (
+        task_name VARCHAR(100) PRIMARY KEY,
+        interval_seconds INT UNSIGNED NOT NULL,
+        next_run_at DATETIME NOT NULL,
+        locked_at DATETIME NULL,
+        last_started_at DATETIME NULL,
+        last_finished_at DATETIME NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'idle',
+        last_message VARCHAR(500) NULL,
+        run_count BIGINT UNSIGNED NOT NULL DEFAULT 0,
+        INDEX idx_scheduled_due (next_run_at, status)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+    $pdo->exec("CREATE TABLE IF NOT EXISTS indexing_submissions (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        provider VARCHAR(40) NOT NULL DEFAULT 'indexnow',
+        url_count INT UNSIGNED NOT NULL DEFAULT 0,
+        status VARCHAR(20) NOT NULL,
+        http_status SMALLINT UNSIGNED NULL,
+        response_excerpt VARCHAR(500) NULL,
+        started_at DATETIME NOT NULL,
+        finished_at DATETIME NULL,
+        INDEX idx_indexing_status_time (status, started_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+    $pdo->exec("CREATE TABLE IF NOT EXISTS remote_imports (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        user_id BIGINT UNSIGNED NULL,
+        article_id BIGINT UNSIGNED NULL,
+        source_url VARCHAR(1000) NOT NULL,
+        source_host VARCHAR(190) NOT NULL,
+        source_title VARCHAR(255) NULL,
+        source_license VARCHAR(100) NULL,
+        source_image_url VARCHAR(1000) NULL,
+        imported_image_url VARCHAR(1000) NULL,
+        status VARCHAR(30) NOT NULL DEFAULT 'started',
+        error_message VARCHAR(500) NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        completed_at DATETIME NULL,
+        INDEX idx_import_user_time (user_id, created_at),
+        INDEX idx_import_status_time (status, created_at),
+        INDEX idx_import_host (source_host)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+    $pdo->exec("CREATE TABLE IF NOT EXISTS media_sources (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        image_id BIGINT UNSIGNED NOT NULL,
+        source_url VARCHAR(1000) NOT NULL,
+        source_page_url VARCHAR(1000) NULL,
+        source_host VARCHAR(190) NOT NULL,
+        attribution VARCHAR(500) NULL,
+        license_name VARCHAR(100) NULL,
+        imported_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_media_source_image (image_id),
+        INDEX idx_media_source_host (source_host, imported_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+    $pdo->exec("CREATE TABLE IF NOT EXISTS article_attributions (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        article_id BIGINT UNSIGNED NOT NULL,
+        source_url VARCHAR(1000) NOT NULL,
+        source_title VARCHAR(255) NULL,
+        license_name VARCHAR(100) NULL,
+        attribution_text VARCHAR(1000) NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_attribution_article (article_id),
+        INDEX idx_attribution_source (source_url(190))
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
     // Upgrade the original BanglaVerseWiki tables without destroying existing data.
     $columns = [
         'users' => [
@@ -230,6 +301,7 @@ function run_migrations(PDO $pdo): void
         'drafts' => [
             'seo_title' => 'VARCHAR(255) NULL',
             'seo_description' => 'VARCHAR(320) NULL',
+            'remote_import_id' => 'BIGINT UNSIGNED NULL',
         ],
         'revisions' => [
             'title' => 'VARCHAR(255) NULL',
@@ -252,6 +324,9 @@ function run_migrations(PDO $pdo): void
             }
         }
     }
+    if (!database_index_exists($pdo, 'activity_log', 'idx_activity_user_action_time')) {
+        $pdo->exec('ALTER TABLE activity_log ADD INDEX idx_activity_user_action_time (user_id, action, created_at)');
+    }
 
     // Preserve attribution and publication dates when upgrading the original schema.
     $pdo->exec("UPDATE articles a SET a.author_id = (SELECT r.user_id FROM revisions r WHERE r.article_id = a.id ORDER BY r.id ASC LIMIT 1) WHERE a.author_id IS NULL");
@@ -269,19 +344,56 @@ function run_migrations(PDO $pdo): void
         'allow_registration' => '1',
         'require_review' => '0',
         'default_meta_description' => 'BanglaVerseWiki is a free, community-built encyclopedia for Bengali knowledge, culture, history and ideas.',
-        'schema_version' => '6',
+        'remote_import_enabled' => '1',
+        'indexnow_interval_minutes' => '50',
+        'schema_version' => '7',
     ];
     $insert = $pdo->prepare('INSERT IGNORE INTO settings (setting_key, setting_value, is_public) VALUES (?, ?, 1)');
     foreach ($defaults as $key => $value) {
         $insert->execute([$key, $value]);
     }
-    $pdo->prepare("UPDATE settings SET setting_value = '6' WHERE setting_key = 'schema_version'")->execute();
+    $pdo->prepare("UPDATE settings SET setting_value = '7' WHERE setting_key = 'schema_version'")->execute();
+    $pdo->exec("INSERT IGNORE INTO scheduled_tasks (task_name, interval_seconds, next_run_at, status) VALUES ('indexnow_full_refresh', 3000, UTC_TIMESTAMP(), 'idle')");
+}
+
+function reset_content_if_requested(PDO $pdo): void
+{
+    if (FRESH_CONTENT_RESET !== '1' || setting($pdo, 'fresh_content_reset_v1', '') !== '') {
+        return;
+    }
+    $tables = [
+        'article_attributions', 'article_categories', 'article_likes', 'discussions', 'drafts',
+        'watchlist', 'reports', 'revisions', 'search_documents', 'search_queries', 'remote_imports',
+        'media_sources', 'images', 'activity_log', 'indexing_submissions', 'articles', 'categories',
+    ];
+    try {
+        $pdo->beginTransaction();
+        foreach ($tables as $table) {
+            $pdo->exec("DELETE FROM `{$table}`");
+        }
+        $pdo->exec("UPDATE scheduled_tasks SET next_run_at = UTC_TIMESTAMP(), locked_at = NULL, last_started_at = NULL, last_finished_at = NULL, status = 'idle', last_message = 'Fresh encyclopedia initialized.', run_count = 0 WHERE task_name = 'indexnow_full_refresh'");
+        $pdo->prepare("INSERT INTO settings (setting_key, setting_value, is_public) VALUES ('fresh_content_reset_v1', UTC_TIMESTAMP(), 0) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)")->execute();
+        $pdo->commit();
+    } catch (Throwable $exception) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        error_log('Fresh content reset failed: ' . $exception->getMessage());
+        throw $exception;
+    }
 }
 
 function database_column_exists(PDO $pdo, string $table, string $column): bool
 {
     $stmt = $pdo->prepare('SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?');
     $stmt->execute([$table, $column]);
+    return (bool) $stmt->fetchColumn();
+}
+
+function database_index_exists(PDO $pdo, string $table, string $index): bool
+{
+    $stmt = $pdo->prepare('SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ?');
+    $stmt->execute([$table, $index]);
     return (bool) $stmt->fetchColumn();
 }
 

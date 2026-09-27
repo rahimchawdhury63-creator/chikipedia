@@ -9,7 +9,7 @@ $page_description = $page_description ?? setting($pdo, 'default_meta_description
 $page_canonical = $page_canonical ?? site_url(request_path());
 $page_robots = $page_robots ?? 'index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1';
 $page_type = $page_type ?? 'website';
-$page_image = $page_image ?? site_url('/img/icon/android-chrome-512x512.png');
+$page_image = $page_image ?? site_url('/img/brand/social-default.jpg');
 $body_class = $body_class ?? '';
 $flashes = pull_flashes();
 
@@ -49,6 +49,7 @@ $websiteSchema = [
     <link rel="alternate" type="application/rss+xml" title="<?= e(SITE_NAME) ?> recent articles" href="<?= e(site_url('/feed.xml')) ?>">
     <link rel="sitemap" type="application/xml" href="<?= e(site_url('/sitemap.xml')) ?>">
     <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="icon" href="/img/brand/logo.svg" type="image/svg+xml">
     <link rel="icon" href="/img/icon/favicon.ico" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/img/icon/favicon-32x32.png">
     <link rel="apple-touch-icon" href="/img/icon/apple-touch-icon.png">
@@ -58,12 +59,14 @@ $websiteSchema = [
     <meta property="og:description" content="<?= e($page_description) ?>">
     <meta property="og:url" content="<?= e($page_canonical) ?>">
     <meta property="og:image" content="<?= e($page_image) ?>">
+    <meta property="og:image:alt" content="<?= e($page_title) ?>">
+    <?php if (str_ends_with($page_image, '/img/brand/social-default.jpg')): ?><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><?php endif; ?>
     <meta property="og:locale" content="bn_BD">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="<?= e($page_title) ?>">
     <meta name="twitter:description" content="<?= e($page_description) ?>">
     <meta name="twitter:image" content="<?= e($page_image) ?>">
-    <link rel="stylesheet" href="/assets/css/app.css?v=4">
+    <link rel="stylesheet" href="/assets/css/app.css?v=5">
     <script type="application/ld+json"><?= json_encode($websiteSchema, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG) ?></script>
 </head>
 <body class="<?= e($body_class) ?>">
@@ -75,7 +78,7 @@ $websiteSchema = [
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
         </button>
         <a class="brand" href="/" aria-label="<?= e(SITE_NAME) ?> home">
-            <span class="brand-mark" aria-hidden="true">ব</span>
+            <img class="brand-logo" src="/img/brand/logo.svg" width="42" height="42" alt="">
             <span class="brand-copy"><strong>BanglaVerse</strong><small>WIKI · মুক্ত বিশ্বকোষ</small></span>
         </a>
         <form class="header-search" action="/search" method="get" role="search" data-search-form>

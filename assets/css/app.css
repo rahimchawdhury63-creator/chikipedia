@@ -50,8 +50,7 @@ img { height: auto; }
 .site-header { position: sticky; top: 0; z-index: 100; height: var(--header-height); background: color-mix(in srgb, var(--paper) 94%, transparent); border-bottom: 1px solid var(--line-soft); backdrop-filter: saturate(140%) blur(14px); }
 .header-inner { width: min(var(--content-width), 100%); height: 100%; margin: auto; padding: 0 24px; display: flex; align-items: center; gap: 22px; }
 .brand { display: inline-flex; align-items: center; gap: 10px; min-width: max-content; color: var(--ink); text-decoration: none!important; }
-.brand-mark { display: grid; place-items: center; width: 40px; aspect-ratio: 1; border: 1px solid var(--ink); border-radius: 50%; font: 700 25px/1 var(--serif); position: relative; background: var(--paper); }
-.brand-mark::after { content: ""; position: absolute; inset: 4px; border-block: 1px solid var(--line); border-radius: 50%; opacity: .7; }
+.brand-logo { display: block; width: 42px; height: 42px; flex: 0 0 42px; filter: drop-shadow(0 1px 1px rgba(0,0,0,.08)); }
 .brand-copy { display: grid; line-height: 1.05; }
 .brand-copy strong { font: 600 20px/1 var(--serif); letter-spacing: -.5px; }
 .brand-copy small { margin-top: 4px; color: var(--muted); font-size: 8px; font-weight: 700; letter-spacing: 2.3px; }
@@ -119,7 +118,8 @@ img { height: auto; }
 
 /* Homepage */
 .home-page { background: linear-gradient(180deg, #f6f8fc 0, var(--paper) 430px); }
-.home-hero { width: min(1120px, 100%); margin: 0 auto; padding: 70px 24px 48px; text-align: center; }
+.home-hero { position: relative; isolation: isolate; width: min(1120px, 100%); margin: 0 auto; padding: 70px 24px 48px; text-align: center; overflow: hidden; }
+.home-hero::after { content: ""; position: absolute; z-index: -1; inset: 0 -12%; background: radial-gradient(circle at center, transparent 15%, var(--paper) 72%), url('/img/brand/social-default-768.webp') center/cover no-repeat; opacity: .15; pointer-events: none; }
 .eyebrow { display: inline-flex; align-items: center; gap: 7px; margin-bottom: 14px; color: var(--blue-dark); font-size: 12px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
 .eyebrow::before { content: ""; width: 20px; height: 2px; background: var(--blue); }
 .home-hero h1 { max-width: 900px; margin: 0 auto 16px; font: 400 clamp(2.65rem, 7vw, 5.15rem)/.98 var(--serif); letter-spacing: -.055em; }
@@ -221,6 +221,9 @@ img { height: auto; }
 .infobox dt { font-weight: 800; }
 .wiki-notice, .wiki-hatnote { clear: both; margin: 18px 0; padding: 12px 15px; background: var(--blue-soft); border-left: 4px solid var(--blue); }
 .wiki-notice.warning { background: #fff3cd; border-left-color: var(--orange); }
+.attribution-notice { font-size: .88rem; overflow-wrap: anywhere; }
+.attribution-notice ul { margin: 8px 0 0; padding-left: 20px; }
+.attribution-notice li + li { margin-top: 5px; }
 .wiki-hatnote { padding-block: 8px; color: var(--muted); background: var(--canvas); border-color: var(--line); font-style: italic; }
 .wiki-quote { padding: 18px 22px!important; background: var(--canvas); border-left-color: var(--blue)!important; font: 20px/1.55 var(--serif); }
 .wiki-quote cite { display: block; margin-top: 8px; color: var(--muted); font: 13px var(--sans); }
@@ -405,7 +408,7 @@ input:focus, textarea:focus, select:focus { border-color: var(--blue); outline: 
     .header-inner { padding: 0 15px; gap: 9px; }
     .mobile-menu-button { display: grid; flex: 0 0 38px; }
     .brand-copy { display: none; }
-    .brand-mark { width: 37px; }
+    .brand-logo { width: 38px; height: 38px; flex-basis: 38px; }
     .header-search { margin-left: 4px; }
     .header-actions .desktop-only, .desktop-create { display: none; }
     .mobile-drawer { position: fixed; inset: var(--header-height) auto 0 0; width: min(330px, 88vw); padding: 17px; display: grid; align-content: start; gap: 3px; color: var(--ink); background: var(--surface-raised); border-right: 1px solid var(--line); box-shadow: var(--shadow-lg); }

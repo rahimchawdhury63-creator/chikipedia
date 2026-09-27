@@ -1,6 +1,6 @@
 <?php
 declare(strict_types=1);
-$page_scripts = ['/assets/js/editor.js?v=4'];
+$page_scripts = ['/assets/js/editor.js?v=5'];
 $page_robots = 'noindex,nofollow';
 require APP_ROOT . '/includes/header.php';
 ?>
@@ -13,6 +13,7 @@ require APP_ROOT . '/includes/header.php';
     <form method="post" action="<?= e($formAction) ?>" data-editor-form data-article-id="<?= (int) $articleId ?>">
         <?= csrf_field() ?>
         <input type="hidden" name="article_updated_at" value="<?= e($articleUpdatedAt) ?>">
+        <input type="hidden" name="remote_import_id" value="<?= (int) ($sourceImportId ?? 0) ?>" data-remote-import-id>
         <div class="form-group">
             <label for="editor-title">Article title</label>
             <input class="editor-title-input" id="editor-title" name="title" type="text" value="<?= e($sourceTitle) ?>" maxlength="255" required autocomplete="off" placeholder="A clear, recognizable title" data-editor-title>
@@ -36,6 +37,7 @@ require APP_ROOT . '/includes/header.php';
                     <button type="button" title="Infobox" data-template="{{Infobox\n| title = Article title\n| image = \n| caption = \n| type = \n| location = \n}}">Info</button>
                     <button type="button" title="Table" data-template="{|\n|+ Table title\n|-\n! Heading 1 !! Heading 2\n|-\n| Cell 1 || Cell 2\n|}">Table</button>
                     <button type="button" title="Upload image" data-image-upload>Image</button>
+                    <button type="button" title="Import a licensed encyclopedia article and transfer its reusable images to ImgBB" data-article-import>Import</button>
                 </div>
                 <div class="editor-tabs" role="tablist">
                     <button class="active" type="button" role="tab" aria-selected="true" data-editor-tab="source">Source</button>
@@ -77,9 +79,9 @@ require APP_ROOT . '/includes/header.php';
         </div>
     </form>
 </main>
-<dialog class="upload-dialog" data-upload-dialog>
+<dialog class="upload-dialog" aria-labelledby="upload-dialog-title" data-upload-dialog>
     <form method="dialog" data-upload-form>
-        <h2>Upload an image</h2>
+        <h2 id="upload-dialog-title">Upload an image</h2>
         <p>Images are uploaded securely to ImgBB. Use only files you have the right to share.</p>
         <div class="upload-dropzone">
             <label for="wiki-image-file">Choose JPEG, PNG, GIF, or WebP (max 16 MB)</label>
@@ -87,9 +89,21 @@ require APP_ROOT . '/includes/header.php';
         </div>
         <div class="form-group"><label for="wiki-image-alt">Alternative text</label><input id="wiki-image-alt" type="text" name="alt_text" maxlength="255" required placeholder="Describe what the image shows"></div>
         <div class="form-group"><label for="wiki-image-caption">Caption</label><input id="wiki-image-caption" type="text" name="caption" maxlength="255" placeholder="Context shown below the image"></div>
-        <div class="upload-progress" hidden data-upload-progress><span></span></div>
-        <p class="form-error" hidden data-upload-error></p>
+        <div class="upload-progress" role="progressbar" aria-label="Image upload progress" hidden data-upload-progress><span></span></div>
+        <p class="form-error" role="alert" hidden data-upload-error></p>
         <div class="form-actions"><button class="button button-primary" type="submit" value="upload">Upload &amp; insert</button><button class="button" type="button" data-upload-close>Cancel</button></div>
+    </form>
+</dialog>
+<dialog class="upload-dialog import-dialog" aria-labelledby="import-dialog-title" data-import-dialog>
+    <form method="dialog" data-import-form>
+        <h2 id="import-dialog-title">Import a licensed encyclopedia draft</h2>
+        <p>Paste a Wikipedia, MediaWiki, or other encyclopedia article URL. BanglaVerseWiki will create an editable draft and transfer up to three detected reusable images to ImgBB—never hotlinking them.</p>
+        <div class="form-group"><label for="import-source-url">Article URL</label><input id="import-source-url" type="url" name="source_url" required placeholder="https://en.wikipedia.org/wiki/Example"></div>
+        <div class="form-group"><label for="import-license">Reuse license</label><select id="import-license" name="license" required><option value="CC BY-SA 4.0">CC BY-SA 4.0</option><option value="CC BY-SA 3.0">CC BY-SA 3.0</option><option value="CC0 / Public domain">CC0 / Public domain</option><option value="Permission obtained">Permission obtained</option></select></div>
+        <label class="checkbox"><input type="checkbox" name="rights_confirmed" value="1" required> I verified that this source and its detected images permit reuse under the selected license. I will review the draft and preserve attribution.</label>
+        <div class="upload-progress" role="progressbar" aria-label="Article import progress" hidden data-import-progress><span></span></div>
+        <p class="form-error" role="alert" hidden data-import-error></p>
+        <div class="form-actions"><button class="button button-primary" type="submit" value="import">Import draft &amp; images</button><button class="button" type="button" data-import-close>Cancel</button></div>
     </form>
 </dialog>
 <?php require APP_ROOT . '/includes/footer.php'; ?>

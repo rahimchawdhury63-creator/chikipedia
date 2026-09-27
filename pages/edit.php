@@ -21,6 +21,7 @@ $sourceContent = $article['content'];
 $sourceSummary = '';
 $sourceSeoTitle = $article['seo_title'] ?? '';
 $sourceSeoDescription = $article['seo_description'] ?? '';
+$sourceImportId = 0;
 $canPublish = $article['status'] === 'published' || can_moderate() || setting($pdo, 'require_review', '0') !== '1';
 
 if (!empty($_GET['draft'])) {
@@ -32,6 +33,7 @@ if (!empty($_GET['draft'])) {
         $sourceSummary = $draft['edit_summary'] ?? '';
         $sourceSeoTitle = $draft['seo_title'] ?? $sourceSeoTitle;
         $sourceSeoDescription = $draft['seo_description'] ?? $sourceSeoDescription;
+        $sourceImportId = (int) ($draft['remote_import_id'] ?? 0);
     }
 }
 
@@ -42,6 +44,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $sourceSummary = trim((string) ($_POST['edit_summary'] ?? ''));
     $sourceSeoTitle = mb_substr(trim((string) ($_POST['seo_title'] ?? '')), 0, 255);
     $sourceSeoDescription = mb_substr(trim((string) ($_POST['seo_description'] ?? '')), 0, 320);
+    $sourceImportId = max(0, (int) ($_POST['remote_import_id'] ?? 0));
     $action = $_POST['submit_action'] ?? 'draft';
 
     if (mb_strlen($sourceTitle) < 2 || mb_strlen($sourceTitle) > 255) {
@@ -56,9 +59,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $draftStmt = $pdo->prepare('SELECT id FROM drafts WHERE user_id = ? AND article_id = ? ORDER BY updated_at DESC LIMIT 1');
         $draftStmt->execute([current_user()['id'], $articleId]);
         if ($draftId = $draftStmt->fetchColumn()) {
-            $pdo->prepare('UPDATE drafts SET title = ?, content = ?, edit_summary = ?, seo_title = ?, seo_description = ?, updated_at = UTC_TIMESTAMP() WHERE id = ?')->execute([$sourceTitle, $sourceContent, $sourceSummary, $sourceSeoTitle, $sourceSeoDescription, $draftId]);
+            $pdo->prepare('UPDATE drafts SET title = ?, content = ?, edit_summary = ?, seo_title = ?, seo_description = ?, remote_import_id = ?, updated_at = UTC_TIMESTAMP() WHERE id = ?')->execute([$sourceTitle, $sourceContent, $sourceSummary, $sourceSeoTitle, $sourceSeoDescription, $sourceImportId ?: null, $draftId]);
         } else {
-            $pdo->prepare('INSERT INTO drafts (user_id, article_id, title, content, edit_summary, seo_title, seo_description) VALUES (?, ?, ?, ?, ?, ?, ?)')->execute([current_user()['id'], $articleId, $sourceTitle, $sourceContent, $sourceSummary, $sourceSeoTitle, $sourceSeoDescription]);
+            $pdo->prepare('INSERT INTO drafts (user_id, article_id, title, content, edit_summary, seo_title, seo_description, remote_import_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')->execute([current_user()['id'], $articleId, $sourceTitle, $sourceContent, $sourceSummary, $sourceSeoTitle, $sourceSeoDescription, $sourceImportId ?: null]);
         }
         flash('success', 'Your private draft was saved.');
         redirect('/drafts');
@@ -95,6 +98,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $revision->execute([$articleId, current_user()['id'], $sourceTitle, $sourceContent, $summary, !empty($_POST['is_minor']) ? 1 : 0]);
             sync_article_categories($pdo, $articleId, extract_categories($sourceContent));
             sync_search_document($pdo, $articleId);
+            attach_remote_import($pdo, $sourceImportId, $articleId, (int) current_user()['id']);
             $pdo->prepare('DELETE FROM drafts WHERE user_id = ? AND article_id = ?')->execute([current_user()['id'], $articleId]);
             $pdo->commit();
             log_activity($pdo, 'article.edited', 'article', $articleId, ['summary' => $summary]);

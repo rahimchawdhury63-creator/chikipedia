@@ -104,6 +104,25 @@ function time_ago(?string $date): string
     return 'just now';
 }
 
+function time_until(?string $date): string
+{
+    if (!$date) {
+        return 'not scheduled';
+    }
+    $seconds = strtotime($date) - time();
+    if ($seconds <= 0) {
+        return 'due now';
+    }
+    $units = [86400 => 'day', 3600 => 'hour', 60 => 'minute'];
+    foreach ($units as $size => $label) {
+        if ($seconds >= $size) {
+            $count = (int) floor($seconds / $size);
+            return 'in ' . $count . ' ' . $label . ($count === 1 ? '' : 's');
+        }
+    }
+    return 'in less than a minute';
+}
+
 function csrf_token(): string
 {
     if (empty($_SESSION['_csrf'])) {
@@ -305,6 +324,27 @@ function extract_categories(string $source): array
     return array_values(array_unique(array_map('trim', $matches[1] ?? [])));
 }
 
+function attach_remote_import(PDO $pdo, int $importId, int $articleId, int $userId): void
+{
+    if ($importId < 1) {
+        return;
+    }
+    $stmt = $pdo->prepare("SELECT source_url, source_title, source_license, source_host FROM remote_imports WHERE id = ? AND user_id = ? AND (status = 'ready' OR (status = 'consumed' AND article_id = ?)) LIMIT 1 FOR UPDATE");
+    $stmt->execute([$importId, $userId, $articleId]);
+    $import = $stmt->fetch();
+    if (!$import) {
+        return;
+    }
+    $attribution = 'Imported from ' . ($import['source_title'] ?: $import['source_host']) . ' (' . $import['source_host'] . ') under ' . ($import['source_license'] ?: 'the stated source license') . '.';
+    $existing = $pdo->prepare('SELECT id FROM article_attributions WHERE article_id = ? AND source_url = ? LIMIT 1');
+    $existing->execute([$articleId, $import['source_url']]);
+    if (!$existing->fetchColumn()) {
+        $insert = $pdo->prepare('INSERT INTO article_attributions (article_id, source_url, source_title, license_name, attribution_text) VALUES (?, ?, ?, ?, ?)');
+        $insert->execute([$articleId, $import['source_url'], $import['source_title'], $import['source_license'], $attribution]);
+    }
+    $pdo->prepare("UPDATE remote_imports SET article_id = ?, status = 'consumed', completed_at = COALESCE(completed_at, UTC_TIMESTAMP()) WHERE id = ?")->execute([$articleId, $importId]);
+}
+
 function normalize_search_query(string $query): string
 {
     $query = mb_strtolower(trim($query));
@@ -404,17 +444,18 @@ function record_search_query(PDO $pdo, string $query, int $resultCount): void
     $stmt->execute([mb_substr(trim($query), 0, 190), $normalized, hash('sha256', $normalized), max(0, $resultCount), hash('sha256', session_id())]);
 }
 
-function notify_indexnow(array $urls): bool
+function submit_indexnow_batch(array $urls): array
 {
+    $urls = array_slice(array_values(array_unique(array_filter($urls))), 0, 10000);
     if (INDEXNOW_KEY === '' || !$urls || !function_exists('curl_init')) {
-        return false;
+        return ['success' => false, 'status' => 0, 'response' => 'IndexNow is unavailable.', 'count' => count($urls)];
     }
-    $host = parse_url(SITE_URL, PHP_URL_HOST);
+    $host = (string) parse_url(SITE_URL, PHP_URL_HOST);
     $payload = json_encode([
         'host' => $host,
         'key' => INDEXNOW_KEY,
         'keyLocation' => site_url('/indexnow-key.txt'),
-        'urlList' => array_values(array_unique($urls)),
+        'urlList' => $urls,
     ], JSON_UNESCAPED_SLASHES);
     $curl = curl_init('https://api.indexnow.org/indexnow');
     curl_setopt_array($curl, [
@@ -422,13 +463,68 @@ function notify_indexnow(array $urls): bool
         CURLOPT_POSTFIELDS => $payload,
         CURLOPT_HTTPHEADER => ['Content-Type: application/json; charset=utf-8'],
         CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_CONNECTTIMEOUT => 2,
-        CURLOPT_TIMEOUT => 4,
+        CURLOPT_CONNECTTIMEOUT => 3,
+        CURLOPT_TIMEOUT => 8,
+        CURLOPT_SSL_VERIFYPEER => true,
     ]);
-    curl_exec($curl);
+    $response = (string) curl_exec($curl);
+    $error = curl_error($curl);
     $status = (int) curl_getinfo($curl, CURLINFO_HTTP_CODE);
     curl_close($curl);
-    return in_array($status, [200, 202], true);
+    return [
+        'success' => in_array($status, [200, 202], true),
+        'status' => $status,
+        'response' => mb_substr($error !== '' ? $error : $response, 0, 500),
+        'count' => count($urls),
+    ];
+}
+
+function notify_indexnow(array $urls): bool
+{
+    return (bool) submit_indexnow_batch($urls)['success'];
+}
+
+function run_traffic_scheduler(PDO $pdo): void
+{
+    if (INDEXNOW_KEY === '') {
+        return;
+    }
+    try {
+        $intervalMinutes = max(10, min(1440, (int) setting($pdo, 'indexnow_interval_minutes', '50')));
+        $pdo->prepare("UPDATE scheduled_tasks SET interval_seconds = ? WHERE task_name = 'indexnow_full_refresh'")->execute([$intervalMinutes * 60]);
+        $claim = $pdo->prepare("UPDATE scheduled_tasks
+            SET locked_at = UTC_TIMESTAMP(), last_started_at = UTC_TIMESTAMP(), status = 'running',
+                next_run_at = DATE_ADD(UTC_TIMESTAMP(), INTERVAL interval_seconds SECOND)
+            WHERE task_name = 'indexnow_full_refresh' AND next_run_at <= UTC_TIMESTAMP()
+              AND (locked_at IS NULL OR locked_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL 15 MINUTE))");
+        $claim->execute();
+        if ($claim->rowCount() !== 1) {
+            return;
+        }
+        $started = gmdate('Y-m-d H:i:s');
+        $urls = [site_url('/'), site_url('/sitemap.xml'), site_url('/sitemap-images.xml'), site_url('/feed.xml'), site_url('/categories')];
+        $articles = $pdo->query("SELECT slug FROM articles WHERE status = 'published' ORDER BY updated_at DESC LIMIT 9900")->fetchAll(PDO::FETCH_COLUMN);
+        foreach ($articles as $slug) {
+            $urls[] = site_url('/wiki/' . rawurlencode((string) $slug));
+        }
+        $categories = $pdo->query('SELECT slug FROM categories ORDER BY id DESC LIMIT 90')->fetchAll(PDO::FETCH_COLUMN);
+        foreach ($categories as $slug) {
+            $urls[] = site_url('/category/' . rawurlencode((string) $slug));
+        }
+        $result = submit_indexnow_batch($urls);
+        $log = $pdo->prepare('INSERT INTO indexing_submissions (provider, url_count, status, http_status, response_excerpt, started_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, UTC_TIMESTAMP())');
+        $log->execute(['indexnow', $result['count'], $result['success'] ? 'accepted' : 'failed', $result['status'] ?: null, $result['response'], $started]);
+        $finish = $pdo->prepare("UPDATE scheduled_tasks SET locked_at = NULL, last_finished_at = UTC_TIMESTAMP(), status = ?, last_message = ?, run_count = run_count + 1 WHERE task_name = 'indexnow_full_refresh'");
+        $finish->execute([$result['success'] ? 'idle' : 'failed', ($result['success'] ? 'Submitted ' : 'Failed to submit ') . $result['count'] . ' URLs (HTTP ' . $result['status'] . ').']);
+    } catch (Throwable $exception) {
+        error_log('Traffic scheduler failed: ' . $exception->getMessage());
+        try {
+            $stmt = $pdo->prepare("UPDATE scheduled_tasks SET locked_at = NULL, status = 'failed', last_message = ? WHERE task_name = 'indexnow_full_refresh'");
+            $stmt->execute([mb_substr($exception->getMessage(), 0, 500)]);
+        } catch (Throwable) {
+            // The request must never fail because a background maintenance task failed.
+        }
+    }
 }
 
 function article_is_visible(array $article): bool

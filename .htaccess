@@ -17,6 +17,8 @@ RewriteRule \.(?:sql|log|ini|env|example|md|zip)$ - [F,L,NC]
 
 # Discovery and indexing endpoints.
 RewriteRule ^sitemap\.xml$ sitemap.php [L,QSA]
+RewriteRule ^sitemap-images\.xml$ sitemap.php?images=1 [L,QSA]
+RewriteRule ^sitemap-images-([0-9]+)\.xml$ sitemap.php?images=1&page=$1 [L,QSA]
 RewriteRule ^sitemap-([0-9]+)\.xml$ sitemap.php?page=$1 [L,QSA]
 RewriteRule ^feed\.xml$ rss.php [L,QSA]
 RewriteRule ^indexnow-key\.txt$ indexnow.php [L]
@@ -25,6 +27,8 @@ RewriteRule ^indexnow-key\.txt$ indexnow.php [L]
 RewriteRule ^api/search/?$ pages/api.php?action=search [L,QSA]
 RewriteRule ^api/preview/?$ pages/api.php?action=preview [L,QSA]
 RewriteRule ^api/autosave/?$ pages/api.php?action=autosave [L,QSA]
+RewriteRule ^api/import-article/?$ pages/api.php?action=import-article [L,QSA]
+RewriteRule ^api/import-image/?$ pages/api.php?action=import-image [L,QSA]
 RewriteRule ^api/upload-image/?$ pages/upload_image.php [L,QSA]
 
 # Encyclopedia pages.

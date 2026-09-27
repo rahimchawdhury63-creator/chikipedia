@@ -63,6 +63,7 @@ jobs:
               'indexnow_key': os.environ.get('INDEXNOW_KEY', ''),
               'admin_bootstrap_email': os.environ['ADMIN_EMAIL'],
               'admin_bootstrap_password_hash': os.environ['ADMIN_PASSWORD_HASH'],
+              'fresh_content_reset': '1',
           }
           body = "<?php\n// Generated only inside the protected deployment runner.\nreturn [\n"
           body += ''.join(f"    {php_string(key)} => {php_string(value)},\n" for key, value in values.items())

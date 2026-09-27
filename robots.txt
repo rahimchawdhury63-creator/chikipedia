@@ -17,3 +17,4 @@ Disallow: /setup
 Disallow: /talk/
 
 Sitemap: https://banglaversewiki.unaux.com/sitemap.xml
+Sitemap: https://banglaversewiki.unaux.com/sitemap-images.xml

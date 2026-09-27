@@ -50,6 +50,20 @@ $relatedStmt = $pdo->prepare("SELECT a.title, a.slug, a.excerpt, a.content, a.vi
     ORDER BY shared_categories DESC, a.views DESC, a.updated_at DESC LIMIT 4");
 $relatedStmt->execute([$article['id'], $article['id'], $article['id']]);
 $relatedArticles = $relatedStmt->fetchAll();
+$attributionStmt = $pdo->prepare('SELECT source_url, source_title, license_name, attribution_text FROM article_attributions WHERE article_id = ? ORDER BY id');
+$attributionStmt->execute([$article['id']]);
+$attributions = $attributionStmt->fetchAll();
+$imageAttributions = [];
+preg_match_all('/\[\[(?:File|Image|চিত্র):\s*(https:\/\/[^\]|\s]+)/iu', (string) $article['content'], $articleImages);
+$imageUrls = array_slice(array_values(array_unique($articleImages[1] ?? [])), 0, 100);
+if ($imageUrls) {
+    $placeholders = implode(',', array_fill(0, count($imageUrls), '?'));
+    $mediaStmt = $pdo->prepare("SELECT i.alt_text, i.file_path, ms.source_url, ms.source_page_url, ms.license_name, ms.attribution
+        FROM images i JOIN media_sources ms ON ms.id = (SELECT MAX(ms2.id) FROM media_sources ms2 WHERE ms2.image_id = i.id)
+        WHERE i.file_path IN ({$placeholders}) ORDER BY i.id");
+    $mediaStmt->execute($imageUrls);
+    $imageAttributions = $mediaStmt->fetchAll();
+}
 
 $isLiked = false;
 $isWatched = false;
@@ -66,7 +80,7 @@ $page_title = ($article['seo_title'] ?: $article['title']) . ' — ' . SITE_NAME
 $page_description = $description;
 $page_canonical = site_url('/wiki/' . rawurlencode($article['slug']));
 $page_type = 'article';
-$page_image = $article['featured_image'] ?: site_url('/img/icon/android-chrome-512x512.png');
+$page_image = $article['featured_image'] ?: site_url('/img/brand/social-default.jpg');
 if ($article['status'] !== 'published') {
     $page_robots = 'noindex,nofollow';
 }
@@ -106,6 +120,8 @@ require APP_ROOT . '/includes/header.php';
         <div class="wiki-content">
             <?= $parsed['html'] ?>
         </div>
+        <?php if ($attributions): ?><aside class="wiki-notice attribution-notice"><strong>Content attribution</strong><ul><?php foreach ($attributions as $attribution): ?><li><a href="<?= e($attribution['source_url']) ?>" rel="nofollow noopener noreferrer" target="_blank"><?= e($attribution['source_title'] ?: parse_url($attribution['source_url'], PHP_URL_HOST)) ?></a> · <?= e($attribution['license_name'] ?: 'source license') ?><?php if ($attribution['attribution_text']): ?> — <?= e($attribution['attribution_text']) ?><?php endif; ?></li><?php endforeach; ?></ul></aside><?php endif; ?>
+        <?php if ($imageAttributions): ?><aside class="wiki-notice attribution-notice"><strong>Media attribution</strong><ul><?php foreach ($imageAttributions as $mediaCredit): ?><li><a href="<?= e($mediaCredit['source_page_url'] ?: $mediaCredit['source_url']) ?>" rel="nofollow noopener noreferrer" target="_blank"><?= e($mediaCredit['alt_text'] ?: 'Imported image') ?></a> · <?= e($mediaCredit['license_name'] ?: 'reuse rights confirmed') ?><?php if ($mediaCredit['attribution']): ?> — <?= e($mediaCredit['attribution']) ?><?php endif; ?></li><?php endforeach; ?></ul></aside><?php endif; ?>
         <?php if ($categories): ?>
         <nav class="article-categories" aria-label="Categories"><strong>Categories</strong><?php foreach ($categories as $category): ?><a href="/category/<?= e($category['slug']) ?>"><?= e($category['name']) ?></a><?php endforeach; ?></nav>
         <?php endif; ?>

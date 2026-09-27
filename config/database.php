@@ -32,11 +32,13 @@ define('SITE_NAME', $getConfig('SITE_NAME', 'site_name', 'BanglaVerseWiki'));
 define('SITE_URL', rtrim((string) $getConfig('SITE_URL', 'site_url', 'https://banglaversewiki.unaux.com'), '/'));
 define('SITE_LANGUAGE', $getConfig('SITE_LANGUAGE', 'site_language', 'bn'));
 define('IMGBB_API_KEY', (string) $getConfig('IMGBB_API_KEY', 'imgbb_api_key', ''));
-define('INDEXNOW_KEY', (string) $getConfig('INDEXNOW_KEY', 'indexnow_key', ''));
+// IndexNow ownership keys are public by design and are served at /indexnow-key.txt.
+define('INDEXNOW_KEY', (string) $getConfig('INDEXNOW_KEY', 'indexnow_key', 'dc7088dee401ff0786e6239cbfec3b92'));
 define('GOOGLE_SITE_VERIFICATION', (string) $getConfig('GOOGLE_SITE_VERIFICATION', 'google_site_verification', '2pHt_phns6GkO5b7NdMWpt9wJypEjRsfSnSC6YNvCjY'));
 define('ADMIN_BOOTSTRAP_EMAIL', (string) $getConfig('ADMIN_BOOTSTRAP_EMAIL', 'admin_bootstrap_email', ''));
 define('ADMIN_BOOTSTRAP_PASSWORD', (string) $getConfig('ADMIN_BOOTSTRAP_PASSWORD', 'admin_bootstrap_password', ''));
 define('ADMIN_BOOTSTRAP_PASSWORD_HASH', (string) $getConfig('ADMIN_BOOTSTRAP_PASSWORD_HASH', 'admin_bootstrap_password_hash', ''));
+define('FRESH_CONTENT_RESET', (string) $getConfig('FRESH_CONTENT_RESET', 'fresh_content_reset', '0'));
 
 if (session_status() === PHP_SESSION_NONE) {
     $isSecure = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
@@ -83,5 +85,15 @@ try {
 
 require_once APP_ROOT . '/includes/migrations.php';
 run_migrations($pdo);
+reset_content_if_requested($pdo);
 bootstrap_administrator($pdo);
 refresh_session_user($pdo);
+
+// Shared-hosting scheduler: due maintenance runs after a normal request, so no
+// daemon, worker, or server cron is required. A database lease prevents overlap.
+register_shutdown_function(static function () use ($pdo): void {
+    if (function_exists('fastcgi_finish_request')) {
+        @fastcgi_finish_request();
+    }
+    run_traffic_scheduler($pdo);
+});

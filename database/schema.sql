@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS revisions (
 CREATE TABLE IF NOT EXISTS drafts (
  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, user_id BIGINT UNSIGNED NOT NULL, article_id BIGINT UNSIGNED NULL,
  title VARCHAR(255) NOT NULL DEFAULT '', content MEDIUMTEXT NOT NULL, edit_summary VARCHAR(255) NULL,
- seo_title VARCHAR(255) NULL, seo_description VARCHAR(320) NULL,
+ seo_title VARCHAR(255) NULL, seo_description VARCHAR(320) NULL, remote_import_id BIGINT UNSIGNED NULL,
  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
  INDEX idx_draft_user (user_id, updated_at), INDEX idx_draft_article (article_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -78,7 +78,8 @@ CREATE TABLE IF NOT EXISTS settings (
 CREATE TABLE IF NOT EXISTS activity_log (
  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, user_id BIGINT UNSIGNED NULL, action VARCHAR(100) NOT NULL,
  entity_type VARCHAR(50) NULL, entity_id BIGINT UNSIGNED NULL, metadata TEXT NULL, ip_hash CHAR(64) NULL,
- created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, INDEX idx_activity_created (created_at), INDEX idx_activity_entity (entity_type, entity_id)
+ created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, INDEX idx_activity_created (created_at),
+ INDEX idx_activity_entity (entity_type, entity_id), INDEX idx_activity_user_action_time (user_id, action, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE TABLE IF NOT EXISTS search_documents (
  article_id BIGINT UNSIGNED PRIMARY KEY, title VARCHAR(255) NOT NULL, normalized_title VARCHAR(255) NOT NULL,
@@ -98,12 +99,47 @@ CREATE TABLE IF NOT EXISTS search_synonyms (
  weight DECIMAL(4,2) NOT NULL DEFAULT 0.75, is_active TINYINT(1) NOT NULL DEFAULT 1,
  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY uq_search_synonym (term, synonym), INDEX idx_synonym_lookup (term, is_active)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS scheduled_tasks (
+ task_name VARCHAR(100) PRIMARY KEY, interval_seconds INT UNSIGNED NOT NULL, next_run_at DATETIME NOT NULL,
+ locked_at DATETIME NULL, last_started_at DATETIME NULL, last_finished_at DATETIME NULL,
+ status VARCHAR(20) NOT NULL DEFAULT 'idle', last_message VARCHAR(500) NULL, run_count BIGINT UNSIGNED NOT NULL DEFAULT 0,
+ INDEX idx_scheduled_due (next_run_at, status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS indexing_submissions (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, provider VARCHAR(40) NOT NULL DEFAULT 'indexnow',
+ url_count INT UNSIGNED NOT NULL DEFAULT 0, status VARCHAR(20) NOT NULL, http_status SMALLINT UNSIGNED NULL,
+ response_excerpt VARCHAR(500) NULL, started_at DATETIME NOT NULL, finished_at DATETIME NULL,
+ INDEX idx_indexing_status_time (status, started_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS remote_imports (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, user_id BIGINT UNSIGNED NULL, article_id BIGINT UNSIGNED NULL,
+ source_url VARCHAR(1000) NOT NULL, source_host VARCHAR(190) NOT NULL, source_title VARCHAR(255) NULL,
+ source_license VARCHAR(100) NULL, source_image_url VARCHAR(1000) NULL, imported_image_url VARCHAR(1000) NULL,
+ status VARCHAR(30) NOT NULL DEFAULT 'started', error_message VARCHAR(500) NULL,
+ created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at DATETIME NULL,
+ INDEX idx_import_user_time (user_id, created_at), INDEX idx_import_status_time (status, created_at), INDEX idx_import_host (source_host)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS media_sources (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, image_id BIGINT UNSIGNED NOT NULL, source_url VARCHAR(1000) NOT NULL,
+ source_page_url VARCHAR(1000) NULL, source_host VARCHAR(190) NOT NULL, attribution VARCHAR(500) NULL,
+ license_name VARCHAR(100) NULL, imported_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ INDEX idx_media_source_image (image_id), INDEX idx_media_source_host (source_host, imported_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS article_attributions (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, article_id BIGINT UNSIGNED NOT NULL, source_url VARCHAR(1000) NOT NULL,
+ source_title VARCHAR(255) NULL, license_name VARCHAR(100) NULL, attribution_text VARCHAR(1000) NULL,
+ created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, INDEX idx_attribution_article (article_id), INDEX idx_attribution_source (source_url(190))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 INSERT IGNORE INTO settings (setting_key, setting_value, is_public) VALUES
  ('site_tagline', 'A free, community-built encyclopedia for everyone.', 1),
  ('homepage_notice', '', 1), ('allow_registration', '1', 1), ('require_review', '0', 1),
  ('default_meta_description', 'BanglaVerseWiki is a free, community-built encyclopedia for Bengali knowledge, culture, history and ideas.', 1),
- ('schema_version', '6', 0);
+ ('remote_import_enabled', '1', 1), ('indexnow_interval_minutes', '50', 1),
+ ('schema_version', '7', 0);
+
+INSERT IGNORE INTO scheduled_tasks (task_name, interval_seconds, next_run_at, status)
+VALUES ('indexnow_full_refresh', 3000, UTC_TIMESTAMP(), 'idle');
 
 INSERT INTO search_documents (article_id, title, normalized_title, body, excerpt, language, quality_score, popularity_score, updated_at)
 SELECT id, title, LOWER(title), content, excerpt, 'bn',

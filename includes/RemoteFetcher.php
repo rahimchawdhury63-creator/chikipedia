@@ -10,7 +10,7 @@ final class RemoteFetchException extends RuntimeException {}
  */
 final class RemoteFetcher
 {
-    public function fetch(string $url, array $allowedMimePrefixes, int $maxBytes = 2097152): array
+    public function fetch(string $url, array $allowedMimePrefixes, int $maxBytes = 2097152, ?string $pinnedHost = null): array
     {
         if (!function_exists('curl_init')) {
             throw new RemoteFetchException('Remote imports require the PHP cURL extension.');
@@ -19,6 +19,7 @@ final class RemoteFetcher
         $current = $url;
         for ($redirects = 0; $redirects <= 3; $redirects++) {
             [$current, $host, $ip] = $this->validateAndResolve($current);
+            if($pinnedHost!==null&&$host!==mb_strtolower(rtrim($pinnedHost,'.')))throw new RemoteFetchException('The remote endpoint redirected outside its approved host.');
             $body = '';
             $headers = [];
             $tooLarge = false;
@@ -84,9 +85,9 @@ final class RemoteFetcher
         throw new RemoteFetchException('The remote resource redirected too many times.');
     }
 
-    public function fetchJson(string $url, int $maxBytes = 2097152): array
+    public function fetchJson(string $url, int $maxBytes = 2097152, ?string $pinnedHost = null): array
     {
-        $response = $this->fetch($url, ['application/json', 'application/problem+json'], $maxBytes);
+        $response = $this->fetch($url, ['application/json', 'application/problem+json'], $maxBytes, $pinnedHost);
         $decoded = json_decode($response['body'], true, 512, JSON_THROW_ON_ERROR);
         if (!is_array($decoded)) {
             throw new RemoteFetchException('The remote API did not return a JSON object.');

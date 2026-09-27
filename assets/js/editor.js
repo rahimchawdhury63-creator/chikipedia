@@ -405,7 +405,8 @@
             if (summary) summary.value = `Imported a licensed draft from ${new URL(result.source_url).hostname}`;
             if (currentMode === 'visual') renderVisual();
             importProgress.style.setProperty('--upload-progress', '100%'); importProgress.setAttribute('aria-valuenow', '100'); importForm.reset(); importDialog.close(); changed();
-            status.textContent = result.warning || `Imported ${result.source_type === 'mediawiki' ? 'MediaWiki' : 'encyclopedia'} draft and attribution. Review before publishing.`;
+            const importCounts = `${Number(result.reference_count || 0)} references · ${Number(result.category_count || 0)} categories · ${Number(result.imported_image_count || 0)}/${Number(result.detected_image_count || 0)} reusable images transferred`;
+            status.textContent = `Imported ${result.source_type === 'mediawiki' ? 'MediaWiki source' : 'encyclopedia draft'} · ${importCounts}. Review before publishing.${result.warning ? ` ${result.warning}` : ''}`;
         } catch (error) { importError.textContent = error.message || 'The article could not be imported.'; importError.hidden = false; status.textContent = 'Import failed · your editor text is unchanged'; }
         finally { submitButton.disabled = false; setTimeout(() => { importProgress.hidden = true; importProgress.style.setProperty('--upload-progress', '0%'); importProgress.removeAttribute('aria-valuenow'); }, 600); }
     });
@@ -421,7 +422,7 @@
             const imageUrl = rawUrl.startsWith('//') ? `https:${rawUrl}` : rawUrl;
             let parsedImageUrl; try { parsedImageUrl = new URL(imageUrl); } catch (_) { continue; }
             if (parsedImageUrl.protocol !== 'https:' || /\.svg(?:\?|$)/i.test(imageUrl) || candidates.some(item => item.url === imageUrl)) continue;
-            candidates.push({ url: imageUrl, host: parsedImageUrl.hostname, alt: image.getAttribute('alt') || '' }); if (candidates.length === 3) break;
+            candidates.push({ url: imageUrl, host: parsedImageUrl.hostname, alt: image.getAttribute('alt') || '' }); if (candidates.length === 10) break;
         }
         return candidates;
     }

@@ -26,8 +26,9 @@ $sourceContent = $article['content'];
 $sourceSummary = '';
 $sourceSeoTitle = $article['seo_title'] ?? '';
 $sourceSeoDescription = $article['seo_description'] ?? '';
-$sourceImportId = 0;
-$canPublish = $article['status'] === 'published' || can_moderate() || setting($pdo, 'require_review', '0') !== '1';
+$sourceImportId=0;
+$importedArticleCheck=$pdo->prepare('SELECT 1 FROM remote_imports WHERE article_id=? AND status=\'consumed\' LIMIT 1');$importedArticleCheck->execute([$articleId]);$isImportedArticle=(bool)$importedArticleCheck->fetchColumn();
+$canPublish=$article['status']==='published'||can_moderate()||(!$isImportedArticle&&setting($pdo,'require_review','0')!=='1');
 
 if (!empty($_GET['draft'])) {
     $draftStmt = $pdo->prepare('SELECT * FROM drafts WHERE id = ? AND user_id = ? AND article_id = ? LIMIT 1');
@@ -50,12 +51,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $sourceSeoTitle = mb_substr(trim((string) ($_POST['seo_title'] ?? '')), 0, 255);
     $sourceSeoDescription = mb_substr(trim((string) ($_POST['seo_description'] ?? '')), 0, 320);
     $sourceImportId = max(0, (int) ($_POST['remote_import_id'] ?? 0));
-    $action = $_POST['submit_action'] ?? 'draft';
+    $action=in_array($_POST['submit_action']??'', ['draft','publish'],true)?$_POST['submit_action']:'draft';
+    if($isImportedArticle&&!preg_match('/\{\{Imported\|/i',$sourceContent)){$origin=$pdo->prepare("SELECT source_url,source_host,source_license,source_revision,source_revision_timestamp FROM remote_imports WHERE article_id=? AND status='consumed' ORDER BY id DESC LIMIT 1");$origin->execute([$articleId]);if($origin=$origin->fetch()){$safeUrl=str_replace([']','[',' '],['%5D','%5B','%20'],$origin['source_url']);$originRevision=trim((string)$origin['source_revision']).($origin['source_revision_timestamp']?' @ '.$origin['source_revision_timestamp'].' UTC':'');$sourceContent='{{Imported|'.$safeUrl.'|'.str_replace('|','—',$origin['source_host']).'|'.str_replace('|','—',$origin['source_license']?:'source license').'|'.str_replace('|','—',$originRevision)."}}\n\n".$sourceContent;}}
 
     if (mb_strlen($sourceTitle) < 2 || mb_strlen($sourceTitle) > 255) {
         $error = 'Use a clear title between 2 and 255 characters.';
     } elseif ($sourceContent === '') {
         $error = 'Article content cannot be empty.';
+    } elseif($action==='publish'&&$sourceImportId>0){
+        $error='A licensed import cannot directly replace an existing article. Save it as a private draft and merge only individually verified changes.';
     } elseif ($action === 'publish' && mb_strlen(strip_tags($sourceContent)) < 50) {
         $error = 'Please add a little more encyclopedic content before submitting.';
     }

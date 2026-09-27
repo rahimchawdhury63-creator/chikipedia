@@ -2,6 +2,7 @@
   "name": "BanglaVerseWiki — Free Encyclopedia",
   "short_name": "BanglaVerse",
   "description": "A free, community-built encyclopedia for Bengali knowledge.",
+  "id": "/",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
@@ -18,6 +19,7 @@
   "shortcuts": [
     {"name": "Search", "url": "/search", "icons": [{"src": "/img/icon/android-chrome-192x192.png", "sizes": "192x192"}]},
     {"name": "Random article", "url": "/special/random", "icons": [{"src": "/img/icon/android-chrome-192x192.png", "sizes": "192x192"}]},
-    {"name": "Recent changes", "url": "/special/recent", "icons": [{"src": "/img/icon/android-chrome-192x192.png", "sizes": "192x192"}]}
+    {"name": "Recent changes", "url": "/special/recent", "icons": [{"src": "/img/icon/android-chrome-192x192.png", "sizes": "192x192"}]},
+    {"name": "Community events", "url": "/events", "icons": [{"src": "/img/icon/android-chrome-192x192.png", "sizes": "192x192"}]}
   ]
 }

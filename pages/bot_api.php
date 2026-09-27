@@ -1,0 +1,31 @@
+<?php
+declare(strict_types=1);
+require_once dirname(__DIR__) . '/config/database.php';
+header('Content-Type: application/json; charset=utf-8'); header('Cache-Control: no-store');
+$authorization=(string)($_SERVER['HTTP_AUTHORIZATION']??$_SERVER['REDIRECT_HTTP_AUTHORIZATION']??'');if($authorization===''&&function_exists('getallheaders')){$requestHeaders=getallheaders();$authorization=(string)($requestHeaders['Authorization']??$requestHeaders['authorization']??'');}
+if (!preg_match('/^Bearer\s+(bvw_[a-f0-9]{64})$/i', $authorization, $match)) { http_response_code(401); echo json_encode(['error'=>'Valid Bearer token required']); exit; }
+$plain=$match[1];$prefix=substr($plain,0,12);$stmt=$pdo->prepare("SELECT t.*,b.status AS bot_status FROM api_tokens t JOIN bots b ON b.id=t.bot_id WHERE t.token_prefix=? AND t.token_hash=? AND t.revoked_at IS NULL AND (t.expires_at IS NULL OR t.expires_at>UTC_TIMESTAMP()) LIMIT 1");$stmt->execute([$prefix,hash('sha256',$plain)]);$token=$stmt->fetch();
+if(!$token||$token['bot_status']!=='active'){http_response_code(403);echo json_encode(['error'=>'Token is expired, revoked, or bot is not active']);exit;}
+$approval=$pdo->prepare("SELECT br.* FROM bot_approval_requests br WHERE br.id=(SELECT MAX(br2.id) FROM bot_approval_requests br2 WHERE br2.bot_id=?) AND br.status IN ('approved','trial') AND (br.status='approved' OR (br.status='trial' AND br.trial_expires_at>UTC_TIMESTAMP()))");$approval->execute([$token['bot_id']]);$approval=$approval->fetch();if(!$approval){http_response_code(403);echo json_encode(['error'=>'Bot approval is not active']);exit;}if((int)($token['approval_request_id']??0)!==(int)$approval['id']){http_response_code(403);echo json_encode(['error'=>'Token was issued under a previous BRFA; request a new credential']);exit;}$pdo->prepare('UPDATE api_tokens SET last_used_at=UTC_TIMESTAMP() WHERE id=?')->execute([$token['id']]);$scopes=array_filter(array_map('trim',explode(',',(string)$token['scopes'])));
+if($_SERVER['REQUEST_METHOD']==='GET'&&!empty($_GET['job_id'])){$job=$pdo->prepare('SELECT j.id,j.title,j.publication_mode,j.status,j.approval_request_id,j.execution_approval_request_id,j.article_id,j.error_message,j.scheduled_for,j.started_at,j.completed_at,a.slug AS article_slug FROM bot_jobs j LEFT JOIN articles a ON a.id=j.article_id WHERE j.id=? AND j.bot_id=?');$job->execute([(int)$_GET['job_id'],$token['bot_id']]);$job=$job->fetch();if(!$job){http_response_code(404);echo json_encode(['error'=>'Job not found']);}else{if($job['article_slug'])$job['article_url']=site_url('/wiki/'.rawurlencode($job['article_slug']));unset($job['article_slug']);echo json_encode($job,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);}exit;}
+if($_SERVER['REQUEST_METHOD']!=='POST'){http_response_code(405);echo json_encode(['error'=>'POST required']);exit;}
+if((int)($_SERVER['CONTENT_LENGTH']??0)>131072){http_response_code(413);echo json_encode(['error'=>'Request body exceeds 128 KiB.']);exit;}$rawBody=file_get_contents('php://input')?:'';$input=json_decode($rawBody,true);if(!is_array($input)){if(str_contains(mb_strtolower((string)($_SERVER['CONTENT_TYPE']??'')),'application/json')){http_response_code(400);echo json_encode(['error'=>'Request body must be a valid JSON object.']);exit;}$input=$_POST;}
+require_once APP_ROOT.'/includes/BotService.php';
+try{
+    $pdo->beginTransaction();
+    $approvalGuard=$pdo->prepare("SELECT br.id FROM bot_approval_requests br JOIN bots b ON b.id=br.bot_id WHERE br.id=? AND br.bot_id=? AND b.status='active' AND br.status IN ('approved','trial') AND (br.status='approved' OR (br.status='trial' AND br.trial_expires_at>UTC_TIMESTAMP())) FOR UPDATE");$approvalGuard->execute([$approval['id'],$token['bot_id']]);if(!$approvalGuard->fetchColumn())throw new BotJobException('Bot approval changed before the request could be queued.');
+    $mode=in_array($input['publication_mode']??'', ['draft','pending','published'],true)?$input['publication_mode']:'pending';
+    if($mode==='published'&&($approval['status']!=='approved'||empty($approval['allow_direct_publish'])))$mode='pending';
+    $hasAuthority=array_key_exists('authority_source_id',$input)||array_key_exists('external_identifier',$input);
+    if($hasAuthority){if(empty($input['authority_source_id'])||trim((string)($input['external_identifier']??''))==='')throw new BotJobException('Both authority_source_id and external_identifier are required.');
+        if(!in_array('bot:authority:queue',$scopes,true))throw new BotJobException('Token lacks authority queue scope.');
+        $jobId=(new BotService($pdo))->queueAuthority((int)$token['bot_id'],(int)$token['user_id'],(int)$input['authority_source_id'],(string)$input['external_identifier'],$mode);
+    }else{
+        if(!in_array('bot:articles:create',$scopes,true))throw new BotJobException('Token lacks article creation scope.');
+        $input['publication_mode']=$mode;$jobId=(new BotService($pdo))->queue((int)$token['bot_id'],(int)$token['user_id'],$input);
+    }
+    $linkToken=$pdo->prepare('UPDATE bot_jobs SET api_token_id=? WHERE id=? AND bot_id=?');$linkToken->execute([$token['id'],$jobId,$token['bot_id']]);if($linkToken->rowCount()!==1)throw new RuntimeException('Bot job token provenance could not be recorded.');
+    $actualMode=$pdo->prepare('SELECT publication_mode FROM bot_jobs WHERE id=? AND bot_id=?');$actualMode->execute([$jobId,$token['bot_id']]);$mode=(string)($actualMode->fetchColumn()?:$mode);$pdo->commit();
+    try{$pdo->prepare("UPDATE scheduled_tasks SET next_run_at=UTC_TIMESTAMP(),locked_at=NULL,status='idle' WHERE task_name='bot_article_queue'")->execute();}catch(Throwable $schedulerError){error_log('Bot API scheduler wake-up failed: '.$schedulerError->getMessage());}
+    http_response_code(202);echo json_encode(['accepted'=>true,'job_id'=>$jobId,'status_url'=>site_url('/api/v1/bot/jobs/'.$jobId),'publication_mode'=>$mode],JSON_UNESCAPED_SLASHES);
+}catch(BotJobException $e){if($pdo->inTransaction())$pdo->rollBack();http_response_code(422);echo json_encode(['error'=>$e->getMessage()],JSON_UNESCAPED_UNICODE);}catch(Throwable $e){if($pdo->inTransaction())$pdo->rollBack();error_log('Bot API failure: '.$e->getMessage());http_response_code(500);echo json_encode(['error'=>'The bot request could not be queued.']);}

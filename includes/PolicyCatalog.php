@@ -156,12 +156,53 @@ function policy_catalog(): array
             ],
         ],
         'bots-automation' => [
-            'title' => 'Bots and automated editing', 'category' => 'Administration',
-            'summary' => 'Automation must be identifiable, bounded, reversible, source-backed, and accountable to an administrator.',
+            'title' => 'Bots, BRFA, and automated editing', 'category' => 'Administration',
+            'summary' => 'Every bot requires public approval, a dedicated account, a narrow task, reliable sourcing, bounded operation, and reversible audit records.',
             'sections' => [
-                'Approval and scope' => ['Only administrators may configure article-posting jobs. Each job records its requester, payload, workflow, run, and resulting article.', 'Bots must respect daily limits and stop on errors rather than repeatedly creating damaged pages.'],
-                'Content safeguards' => ['Automated text must be based on supplied reliable sources. It must not fabricate citations, people, events, quotations, or statistics.', 'Human review is the default. Direct publication is an explicit administrator decision and remains subject to normal review and correction.'],
-                'Accountability' => ['Bot-created articles are labeled in page metadata and revision history. Administrators can pause a bot, cancel jobs, and inspect failures.'],
+                'Approval before operation' => ['An operator must file a public Bot Request for Approval describing the task, source databases, templates, expected volume, failure handling, and trial evidence. Community members may test, question, and oppose the proposal.', 'Autonomous or mass article creation is prohibited until an administrator closes the BRFA as approved or trial. Material scope changes require a new request or amendment.'],
+                'Dedicated identity and API' => ['Approved automation runs through its own bot-role account and a scoped, expiring API token. Human accounts must not disguise automated edits.', 'Tokens are displayed once, stored only as hashes by the platform, and must be revoked after compromise or loss of approval.'],
+                'Content safeguards' => ['Every automated claim must be traceable to a reliable cited record. Bots may not invent citations, infer contentious claims, promote subjects, or use a database entry alone where independent coverage is required for notability.', 'Human review is the default, and every trial output requires it. Direct publication begins only after full approval, requires explicit BRFA permission, and may still be disabled by an administrator.'],
+                'Limits and non-disruption' => ['Bots must obey daily and batch limits, identifier deduplication, source allowlists, publication controls, and stop-on-error behavior. Operators must pause jobs when objections, upstream corruption, template breakage, or unusual error rates appear.', 'Automation must not overwhelm recent changes, evade protection, edit war, or recreate rejected content.'],
+                'Audit and revocation' => ['The platform records requester, bot, BRFA, input provenance, retrieval time and hash, job state, revision, and resulting article. Administrators can pause bots, revoke tokens, cancel jobs, and close an approval.', 'Bot output remains subject to correction, draftification, deletion, attribution, and community review.'],
+            ],
+        ],
+        'authority-data' => [
+            'title' => 'Authority data and machine-created articles', 'category' => 'Core content',
+            'summary' => 'Structured databases can supply facts, but authority, licensing, notability, context, and provenance must each be evaluated.',
+            'sections' => [
+                'Approved connectors' => ['Remote records must come from an administrator-registered HTTPS endpoint with an exact pinned host, defined identifier format, known adapter, and recorded license. Arbitrary URLs and silent redirects to unapproved hosts are not authority sources.', 'Connector status may be suspended when an upstream source becomes unreliable, incompatible, or legally unsuitable.'],
+                'Defined fields and templates' => ['A bot extracts only mapped fields and fills a pre-approved article and infobox structure. Unrecognized fields, markup, remote scripts, and unsourced prose must not pass through as article content.', 'Retrieval URL, external identifier, source record URL, timestamp, response hash, adapter version, and citations must be retained.'],
+                'Authority is not notability' => ['Presence in Wikidata, GBIF, Crossref, OpenAlex, USGS, or another catalog does not automatically justify a standalone article. Connectors marked “review required” can never publish directly, even when a BRFA permits direct operation. The bot and reviewers must apply the relevant notability rule and use independent sources when it requires significant coverage.', 'Database errors must be corrected from reliable evidence and reported upstream when practical.'],
+                'Scientific and statistical care' => ['Taxonomy, geographic boundaries, measurements, event data, authorship, and classifications can change. State the applicable date, units, uncertainty, and authority rather than presenting a volatile value as timeless.', 'Sensitive coordinates, personal identifiers, or harmful location data must be omitted or generalized when safety or privacy requires it.'],
+            ],
+        ],
+        'wiki-imports' => [
+            'title' => 'Compatible-wiki imports', 'category' => 'Safety and legal',
+            'summary' => 'Imports must preserve usable source material and attribution without misrepresenting completeness, review status, or media rights.',
+            'sections' => [
+                'Compatibility and attribution' => ['Import only from supported encyclopedias with a compatible license. Preserve the canonical source page, source title, revision identifier and timestamp, declared license, import time, and the importing editor.', 'Every imported draft carries a visible import notice. Removing the notice before the attribution obligation is otherwise satisfied is prohibited.'],
+                'Content preservation' => ['The importer should retain raw revision wiki source, references, categories, and supported templates as far as the source API and parser permit. Unsupported templates must remain visible for human repair rather than being silently presented as complete prose.', 'Imports enter a reviewable draft or pending workflow; they do not bypass sourcing, neutrality, title, notability, or living-person checks.'],
+                'Images' => ['Only files with machine-verifiable reuse terms may be transferred. Each eligible image passes through ImgBB and stores its original description page, author or attribution, license, and hosted URL.', 'Files with unknown, nonfree, fair-use-only, unsupported, oversized, or failed downloads are skipped with a recorded reason. “Import all images” never overrides copyright or service limits.'],
+                'Limits and correction' => ['API continuation, image bounds, network failures, parser coverage, and deleted source revisions can affect completeness. Import counts and warnings must be shown so reviewers can compare the draft with its source.', 'If attribution or licensing cannot be repaired, remove the affected text or media.'],
+            ],
+        ],
+        'api-token-security' => [
+            'title' => 'API token security', 'category' => 'Safety and legal',
+            'summary' => 'Machine credentials are least-privilege, expiring secrets tied to an accountable account and approved purpose.',
+            'sections' => [
+                'Issuance' => ['Only an administrator may issue a bot API token after approval. Every token has explicit capability scopes, an expiry, a creator, and one dedicated bot account. Authority connector IDs and operator-supplied-payload permission are separately recorded in the current BRFA and rechecked at execution.', 'A token grants no authority beyond its scopes and the current BRFA; approval is rechecked when jobs are queued and executed.'],
+                'Storage and transmission' => ['Send tokens only in the Authorization Bearer header over HTTPS. Never place them in URLs, wiki pages, browser code, source control, logs, or screenshots.', 'The platform stores a one-way hash and shows the plaintext secret only once. Operators should use a hosting secret or protected configuration file.'],
+                'Revocation and response' => ['Revoke and replace a token immediately after suspected disclosure, operator change, unused access, or withdrawn approval.', 'Rate anomalies, invalid scopes, repeated failures, and use outside approved purpose may trigger suspension and audit.'],
+            ],
+        ],
+        'community-events' => [
+            'title' => 'Community events and meetups', 'category' => 'Community process',
+            'summary' => 'Events support encyclopedia work while protecting participants, privacy, neutrality, and transparent moderation.',
+            'sections' => [
+                'Suitable events' => ['Edit-a-thons, training sessions, policy discussions, source workshops, and community meetups must have a clear encyclopedia-related purpose.', 'Event listings are not advertising, fundraising pages, political campaign notices, or endorsements.'],
+                'Time and location' => ['Organizers provide a real start and end in an IANA timezone. The platform stores UTC and displays the time locally to readers.', 'Do not publish private home addresses, participant contact details, or sensitive attendance information. Use an online URL or an appropriate public venue.'],
+                'Moderation and conduct' => ['New events require moderation before public listing. Administrators may reject, cancel, or edit unsafe, misleading, abandoned, or off-topic listings with a recorded reason.', 'Community conduct, harassment, privacy, copyright, and conflict-of-interest rules apply online and in person.'],
+                'RSVPs' => ['Going and interested responses support planning but are not proof of identity or attendance. Participants may change their response.', 'Organizers may not repurpose account or RSVP data for marketing, profiling, or external contact without clear consent.'],
             ],
         ],
         'editing-style' => [

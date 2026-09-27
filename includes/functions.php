@@ -88,6 +88,20 @@ function word_count_unicode(string $text): int
     return count($matches[0] ?? []);
 }
 
+function utc_iso(?string $date): string
+{
+    if (!$date) return '';
+    $timestamp = strtotime($date . (preg_match('/(?:Z|[+-]\d\d:\d\d)$/', $date) ? '' : ' UTC'));
+    return $timestamp ? gmdate('Y-m-d\TH:i:s\Z', $timestamp) : '';
+}
+
+function time_tag(?string $date, bool $relative = true): string
+{
+    if (!$date) return '<span>—</span>';
+    $label = $relative ? time_ago($date) : gmdate('M j, Y H:i', strtotime($date . ' UTC')) . ' UTC';
+    return '<time datetime="' . e(utc_iso($date)) . '" data-utc-time="' . e(utc_iso($date)) . '"' . ($relative ? ' data-relative="1"' : '') . '>' . e($label) . '</time>';
+}
+
 function time_ago(?string $date): string
 {
     if (!$date) {
@@ -307,6 +321,13 @@ function unique_slug(PDO $pdo, string $title, ?int $ignoreArticleId = null): str
     }
 }
 
+function unique_event_slug(PDO $pdo, string $title): string
+{
+    $base = slugify($title); $slug = $base; $suffix = 2;
+    $stmt = $pdo->prepare('SELECT id FROM community_events WHERE slug = ?');
+    while (true) { $stmt->execute([$slug]); if (!$stmt->fetchColumn()) return $slug; $slug = mb_substr($base, 0, 180) . '-' . $suffix++; }
+}
+
 function sync_article_categories(PDO $pdo, int $articleId, array $categoryNames): void
 {
     $pdo->prepare('DELETE FROM article_categories WHERE article_id = ?')->execute([$articleId]);
@@ -378,13 +399,11 @@ function attach_remote_import(PDO $pdo, int $importId, int $articleId, int $user
     if ($importId < 1) {
         return;
     }
-    $stmt = $pdo->prepare("SELECT source_url, source_title, source_license, source_host FROM remote_imports WHERE id = ? AND user_id = ? AND (status = 'ready' OR (status = 'consumed' AND article_id = ?)) LIMIT 1 FOR UPDATE");
+    $stmt = $pdo->prepare("SELECT source_url,source_title,source_license,source_host,source_revision,source_revision_timestamp,source_content_hash FROM remote_imports WHERE id = ? AND user_id = ? AND (status = 'ready' OR (status = 'consumed' AND article_id = ?)) LIMIT 1 FOR UPDATE");
     $stmt->execute([$importId, $userId, $articleId]);
     $import = $stmt->fetch();
-    if (!$import) {
-        return;
-    }
-    $attribution = 'Imported from ' . ($import['source_title'] ?: $import['source_host']) . ' (' . $import['source_host'] . ') under ' . ($import['source_license'] ?: 'the stated source license') . '.';
+    if(!$import)throw new RuntimeException('The remote import is no longer ready for this article.');
+    $attribution = 'Imported from '.($import['source_title']?:$import['source_host']).' ('.$import['source_host'].') under '.($import['source_license']?:'the stated source license').($import['source_revision']?' · source revision '.$import['source_revision']:'').($import['source_revision_timestamp']?' at '.$import['source_revision_timestamp'].' UTC':'').($import['source_content_hash']?' · SHA-256 '.$import['source_content_hash']:'').'.';
     $existing = $pdo->prepare('SELECT id FROM article_attributions WHERE article_id = ? AND source_url = ? LIMIT 1');
     $existing->execute([$articleId, $import['source_url']]);
     if (!$existing->fetchColumn()) {
@@ -685,8 +704,8 @@ function run_traffic_scheduler(PDO $pdo): void
             return;
         }
         $started = gmdate('Y-m-d H:i:s');
-        $urls = [site_url('/'), site_url('/community'), site_url('/policies'), site_url('/sitemap.xml'), site_url('/sitemap-images.xml'), site_url('/feed.xml'), site_url('/categories')];
-        $articles = $pdo->query("SELECT slug FROM articles WHERE status = 'published' ORDER BY updated_at DESC LIMIT 9900")->fetchAll(PDO::FETCH_COLUMN);
+        $urls = [site_url('/'), site_url('/community'), site_url('/events'), site_url('/bots/requests'), site_url('/api/docs'), site_url('/policies'), site_url('/sitemap.xml'), site_url('/sitemap-images.xml'), site_url('/feed.xml'), site_url('/categories')];
+        $articles = $pdo->query("SELECT slug FROM articles WHERE status = 'published' ORDER BY updated_at DESC LIMIT 9800")->fetchAll(PDO::FETCH_COLUMN);
         foreach ($articles as $slug) {
             $urls[] = site_url('/wiki/' . rawurlencode((string) $slug));
         }
@@ -694,6 +713,8 @@ function run_traffic_scheduler(PDO $pdo): void
         foreach ($categories as $slug) {
             $urls[] = site_url('/category/' . rawurlencode((string) $slug));
         }
+        $events=$pdo->query("SELECT slug FROM community_events WHERE status IN ('published','cancelled') AND ends_at>=UTC_TIMESTAMP() ORDER BY updated_at DESC LIMIT 90")->fetchAll(PDO::FETCH_COLUMN);
+        foreach($events as $slug)$urls[]=site_url('/event/'.rawurlencode((string)$slug));
         $result = submit_indexnow_batch($urls);
         $log = $pdo->prepare('INSERT INTO indexing_submissions (provider, url_count, status, http_status, response_excerpt, started_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, UTC_TIMESTAMP())');
         $log->execute(['indexnow', $result['count'], $result['success'] ? 'accepted' : 'failed', $result['status'] ?: null, $result['response'], $started]);

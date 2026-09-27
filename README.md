@@ -5,8 +5,9 @@ A modern, dependency-free Wikipedia-style publishing platform for free PHP/MySQL
 ## What is included
 
 - Integrated visual and MediaWiki-style source editing with loss-aware round trips, protected source capsules for templates/citations/tables/media, split preview, toolbar, keyboard shortcuts, browser recovery, and server-side private autosave
-- Licensed encyclopedia importer for Wikipedia/MediaWiki and other public HTTPS encyclopedias, with source attribution, license records, SSRF protection, automatic bounded image discovery, and mandatory ImgBB transfer
-- Rich-paste image detection: pasting licensed wiki HTML keeps the text and offers to fetch up to three detected images, re-host them on ImgBB, and store their provenance automatically
+- Licensed encyclopedia importer for Wikipedia/MediaWiki and other public HTTPS encyclopedias, preserving raw revision wiki source, references, categories, supported templates, revision provenance, bounded API continuation with explicit incompleteness warnings, visible import labels, and review status
+- Verified reusable-media migration: up to 40 source files per import are checked against file-specific license metadata, re-hosted through ImgBB, rewritten in wiki source, and audited with detected/imported/skipped counts and attribution
+- Rich-paste image detection: pasting licensed wiki HTML keeps the text and offers to fetch up to ten detected images, re-host them on ImgBB, and store their provenance automatically
 - Safe wiki parser: headings, bold/italic, internal/external links, lists, citations and automatic references, images, categories, tables, infoboxes, notes, warnings, quotes, and hatnotes
 - Revision history, line-by-line diff, rollback, edit summaries, minor edits, conflict detection, and transparent recent changes
 - Drafts, review workflow, featured pages, discussions, likes, watchlists, profiles, categories, search, random pages, and trending ranking
@@ -14,13 +15,15 @@ A modern, dependency-free Wikipedia-style publishing platform for free PHP/MySQL
 - Administrator control center for article moderation, administrator-only protection, roles, user blocking, site settings, media, reports, bot jobs, search intelligence, health checks, and activity auditing
 - Complete community portal with editing tasks, wanted pages from the internal-link graph, recent activity, talk activity, active editors, knowledge gaps, governance links, and automation transparency
 - Original policy library covering core content standards, sourcing, living people, copyright, conduct, consensus, disputes, deletion, protection, privacy, administrator accountability, and bot governance
-- Audited BanglaVerseBot queue that deterministically structures administrator-supplied facts and HTTPS sources as draft, pending-review, or explicitly published articles with scheduling and daily safety limits
+- Public Bot Requests for Approval (BRFA) registry with community comments, administrator closure/trials/revocation, dedicated bot accounts, one-time scoped API credentials, source-level publication rules, and immediate safety shutdowns
+- Audited authority-article queue with pinned adapters for Wikidata, GBIF, OpenAlex, Crossref, USGS, World Bank country/indicator APIs, and NASA Exoplanet Archive records; it maps defined fields into cited templates and preserves identifier, retrieval URL, response hash, and timestamps
+- Dedicated community events for edit-a-thons, workshops, training, meetups, contests, and policy discussions, with moderation, IANA timezone-to-UTC storage, browser-local display, capacity-aware RSVPs, discovery, and Event structured data
 - Administrator-only page protection with expiry, reasons, visible notices, enforcement across edit/autosave/rollback, and an immutable protection log
 - Smart hybrid search with exact/prefix matching, MySQL FULLTEXT relevance, popularity/freshness/quality weighting, live suggestions, synonym expansion, zero-result opportunities, and private aggregate analytics
 - Technical SEO: per-page canonical/meta/Open Graph/Twitter tags, Article/Profile/Collection/Breadcrumb/SearchAction/SearchResultsPage JSON-LD, dynamic split sitemaps, RSS, semantic HTML, contextual internal links, clean URLs, robots rules, and fast dependency-free assets
 - Pure-PHP IndexNow automation: publication events submit immediately, while a database-leased traffic scheduler refreshes discovery endpoints and a bounded public-URL batch every 50 minutes without cron, workers, or daemons
 - Image SEO: responsive recreated brand artwork, article social cards, Media RSS, and an image sitemap for hosted article media
-- Installable PWA with a conservative public-page cache and offline fallback
+- Installable PWA with versioned static-asset caching and an offline fallback; session-bound HTML and one-time credentials are never persisted by the service worker
 - Security: prepared queries, output escaping, CSRF protection, safe wiki rendering, secure sessions, login throttling, upload validation, role checks, edit throttling, CSP/security headers, and secrets outside Git
 
 > No website can honestly guarantee “100% instant indexing.” Search engines decide when and whether to index a URL. BanglaVerseWiki provides the strongest standards-based free setup: discoverable internal links, fresh XML sitemaps, RSS, structured data, canonical URLs, and instant IndexNow submission to participating crawlers.
@@ -115,27 +118,33 @@ The **Visual** tab converts supported headings, paragraphs, emphasis, lists, lin
 
 ## Community and policy architecture
 
-`/community` is the public coordination portal. `/policies` is the policy directory, while `/policy/{slug}` renders individual, canonical, indexable standards from `includes/PolicyCatalog.php`. Wanted-page and “what links here” views use normalized `article_links` rows synchronized whenever an article is created, edited, restored, or generated by a bot. Policies are maintained as platform governance documents rather than seeded encyclopedia articles, so a fresh-content reset does not erase them.
+`/community` is the public coordination portal. `/events` provides the moderated calendar, while `/bots/requests` is the automation-governance registry. `/policies` is the policy directory, and `/policy/{slug}` renders individual, canonical, indexable standards from `includes/PolicyCatalog.php`. Wanted-page and “what links here” views use normalized `article_links` rows synchronized whenever an article is created, edited, restored, or generated by a bot. Policies are maintained as platform governance documents rather than seeded encyclopedia articles, so a fresh-content reset does not erase them.
 
-## Structured article bots and protection
+## Authority article bots, BRFA, API, and protection
 
-Only administrators can queue or control BanglaVerseBot from **Administration → Automation bots**. Jobs require a title, neutral description, and at least one HTTPS source; the deterministic service does not call generative AI or fabricate facts. The traffic-driven scheduler processes one due job under a database lease, enforces each bot's daily limit, and records the request, payload, run, result, and article provenance. Human review (`pending`) is the default.
+Every autonomous or mass-editing proposal starts at `/bots/request/new`. The public BRFA records exact tasks, authority databases, licensing/notability plans, sample output, implementation documentation, requested rate, community positions, and the administrator's reasoned closure. Approval provisions a dedicated `users.role='bot'` identity; rejection or revocation pauses the bot, cancels queued work, and revokes its credentials. A 30-day trial expires automatically for authorization purposes and always produces reviewable output; direct publication is available only after full approval.
+
+Administrators may issue a scoped, one-year `bvw_…` Bearer token after approval. The plaintext is displayed once, while only its SHA-256 hash is stored. `POST /api/v1/bot/articles` accepts either a structured sourced payload or an authority source ID plus external identifier; `GET /api/v1/bot/jobs/{id}` reports the authenticated bot's job. Full examples are at `/api/docs`. Approval, bot status, scopes, expiry, source policy, identifier deduplication, daily limits, and direct-publication permission are rechecked when work is queued and executed.
+
+Verified adapters use exact HTTPS host pins and strict identifier formats for Wikidata, GBIF, OpenAlex, Crossref, USGS, World Bank country/indicator APIs, and the NASA Exoplanet Archive. Database presence is not assumed to prove notability: broad record catalogs are forced into human review, while only source classes with a safe pre-approved notability rule can become direct-publication eligible—and then only under an explicit BRFA. Articles and revisions are attributed to the dedicated bot account. Job audit records retain the human requester, queue-time and execution-time BRFA IDs, issuing API credential, authority record URL and identifier, response SHA-256, retrieval time, and adapter version.
 
 Only administrators can protect or unprotect an article and edit or restore an actively protected article. Protection has a reason and optional expiry, is visible to readers, and is recorded in `protection_log`. Protection is independent of draft/published status.
 
 ## Licensed article imports
 
-In the editor, choose **Import article**, enter a public HTTPS Wikipedia/MediaWiki or encyclopedia article URL, select the applicable reuse license, and confirm that reuse is allowed. The server fetches and converts the source into editable wiki text; it never publishes automatically. MediaWiki imports use the official API and attempt file-specific license/artist/credit lookup. Generic pages use a constrained semantic extractor. The import URL, canonical source, license, status, image transfer outcome, and errors remain visible in **Administration → Content imports**.
+In the editor, choose **Import article**, enter a public HTTPS Wikipedia/MediaWiki or encyclopedia article URL, select the applicable reuse license, and confirm that reuse is allowed. It never publishes automatically. MediaWiki imports prefer the complete raw revision source rather than a plaintext extract, follow image/category continuation tokens, retain standard references/categories/templates, and look up each file's license, artist, credit, and description-page URL. Generic pages use a constrained semantic extractor.
 
-When formatted encyclopedia material containing images is pasted, the editor asks for reuse-rights confirmation before any transfer. Confirmed images are fetched by the server and re-hosted on ImgBB. Images without confirmed reuse rights must not be imported.
+Each draft begins with a visible `{{Imported|…}}` provenance label and review warning. MySQL retains the canonical source, API endpoint, license, revision ID/time, source SHA-256, references/categories, detected/imported/skipped media counts, status, and errors. Publication attaches durable article attribution. Only files whose metadata verifies an allowed public-domain, CC0, CC BY, CC BY-SA, GFDL, or Free Art license are transferred automatically; unknown, noncommercial, no-derivatives, fair-use, failed, unsupported, or over-limit files are skipped rather than silently claimed as reusable.
+
+When formatted encyclopedia material containing images is pasted, the editor asks for explicit reuse-rights confirmation before any transfer. Confirmed images are fetched by the server and re-hosted on ImgBB; the source URL, source page, attribution, and declared license are stored separately.
 
 ## Database architecture
 
-`database/schema.sql` is the complete, importable version 8 production schema. Its 28 purposeful normalized tables cover users, articles, immutable revisions, drafts, categories, media/provenance, source attribution, imports, reactions, watchlists, discussions, reports, settings, activity auditing, search analytics, scheduled tasks, IndexNow history, page protection, bot jobs/runs, redirects, and the internal-link graph. Composite, covering, and FULLTEXT indexes follow real query paths. The schema deliberately avoids hundreds of empty or duplicated tables: on constrained shared hosting, normalized tables and correct indexes are safer and substantially faster than artificial table-count inflation.
+`database/schema.sql` is the complete, importable version 9 production schema. Its 35 purposeful normalized tables cover users, articles, immutable revisions, drafts, categories, media/provenance, source attribution, imports, external identifiers, authority connectors, BRFAs/comments, scoped API credentials, events/RSVPs, reactions, watchlists, discussions, reports, settings, activity auditing, search analytics, scheduled tasks, IndexNow history, page protection, bot jobs/runs, redirects, and the internal-link graph. Composite, covering, and FULLTEXT indexes follow real query paths. The schema deliberately avoids hundreds of empty or duplicated tables: on constrained shared hosting, normalized tables and correct indexes are safer and substantially faster than artificial table-count inflation.
 
 ## SEO and crawler automation
 
-- `/sitemap.xml` automatically lists every published article and category. Above 45,000 articles it becomes a sitemap index and exposes `/sitemap-1.xml`, `/sitemap-2.xml`, and so on.
+- `/sitemap.xml` automatically lists published articles, categories, current published and cancelled-event notices, policies, BRFA discovery, and API documentation. Above 45,000 articles it becomes a sitemap index and exposes `/sitemap-1.xml`, `/sitemap-2.xml`, and so on.
 - `/sitemap-images.xml` lists hosted featured and inline wiki images with article context and splits automatically above 45,000 image-bearing articles; scalable article/social imagery is generated from real content rather than shipping duplicate filler files.
 - `/feed.xml` publishes the newest 50 articles as RSS 2.0 with Media RSS images.
 - Publishing and rollback events notify IndexNow immediately when `INDEXNOW_KEY` is configured.

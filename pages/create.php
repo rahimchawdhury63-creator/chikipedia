@@ -36,16 +36,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $sourceSummary = trim((string) ($_POST['edit_summary'] ?? ''));
     $sourceSeoTitle = mb_substr(trim((string) ($_POST['seo_title'] ?? '')), 0, 255);
     $sourceSeoDescription = mb_substr(trim((string) ($_POST['seo_description'] ?? '')), 0, 320);
-    $sourceImportId = max(0, (int) ($_POST['remote_import_id'] ?? 0));
-    $action = $_POST['submit_action'] ?? 'draft';
+    $sourceImportId=max(0,(int)($_POST['remote_import_id']??0));
+    $action=in_array($_POST['submit_action']??'', ['draft','publish'],true)?$_POST['submit_action']:'draft';
+    $verifiedImport=null;
+    if($sourceImportId>0){$importCheck=$pdo->prepare("SELECT source_url,source_host,source_license,source_revision,source_revision_timestamp FROM remote_imports WHERE id=? AND user_id=? AND status='ready'");$importCheck->execute([$sourceImportId,current_user()['id']]);$verifiedImport=$importCheck->fetch();if(!$verifiedImport)$error='The imported source record is unavailable or does not belong to this account.';elseif(!preg_match('/\{\{Imported\|/i',$sourceContent)){$safeUrl=str_replace([']','[',' '],['%5D','%5B','%20'],$verifiedImport['source_url']);$revision=trim((string)$verifiedImport['source_revision']).($verifiedImport['source_revision_timestamp']?' @ '.$verifiedImport['source_revision_timestamp'].' UTC':'');$sourceContent='{{Imported|'.$safeUrl.'|'.str_replace('|','—',$verifiedImport['source_host']).'|'.str_replace('|','—',$verifiedImport['source_license']?:'source license').'|'.str_replace('|','—',$revision)."}}\n\n".$sourceContent;}}
 
-    if (mb_strlen($sourceTitle) < 2 || mb_strlen($sourceTitle) > 255) {
-        $error = 'Use a clear title between 2 and 255 characters.';
-    } elseif ($sourceContent === '') {
-        $error = 'Article content cannot be empty.';
-    } elseif ($action === 'publish' && mb_strlen(strip_tags($sourceContent)) < 50) {
-        $error = 'Please add a little more reliable, encyclopedic content before submitting.';
-    } else {
+    if($error===''&&(mb_strlen($sourceTitle)<2||mb_strlen($sourceTitle)>255)){
+        $error='Use a clear title between 2 and 255 characters.';
+    }elseif($error===''&&$sourceContent===''){
+        $error='Article content cannot be empty.';
+    }elseif($error===''&&$action==='publish'&&mb_strlen(strip_tags($sourceContent))<50){
+        $error='Please add a little more reliable, encyclopedic content before submitting.';
+    }elseif($error===''){
         $duplicate = $pdo->prepare('SELECT slug FROM articles WHERE LOWER(title) = LOWER(?) LIMIT 1');
         $duplicate->execute([$sourceTitle]);
         if ($existingSlug = $duplicate->fetchColumn()) {
@@ -67,7 +69,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         $slug = unique_slug($pdo, $sourceTitle);
-        $status = $canPublish ? 'published' : 'pending';
+        // Licensed imports always enter the review queue, even for privileged importers.
+        $status=$sourceImportId>0?'pending':($canPublish?'published':'pending');
         $summary = $sourceSummary ?: 'Created article';
         $description = excerpt($sourceContent, 220);
         preg_match('/\[\[(?:File|Image|চিত্র):\s*(https:\/\/[^\]|]+)/iu', $sourceContent, $imageMatch);

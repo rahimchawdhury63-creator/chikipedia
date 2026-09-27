@@ -6,6 +6,7 @@
 
 SET FOREIGN_KEY_CHECKS = 0;
 TRUNCATE TABLE article_attributions;
+TRUNCATE TABLE article_external_identifiers;
 TRUNCATE TABLE article_links;
 TRUNCATE TABLE article_protections;
 TRUNCATE TABLE protection_log;
@@ -24,6 +25,8 @@ TRUNCATE TABLE media_sources;
 TRUNCATE TABLE images;
 TRUNCATE TABLE activity_log;
 TRUNCATE TABLE indexing_submissions;
+TRUNCATE TABLE event_registrations;
+TRUNCATE TABLE community_events;
 TRUNCATE TABLE bot_runs;
 TRUNCATE TABLE bot_jobs;
 TRUNCATE TABLE articles;

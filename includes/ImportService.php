@@ -32,26 +32,29 @@ final class ImportService
             if ($article === null) {
                 $article = $this->fetchGenericArticle($sourceUrl);
             }
-            $imageWarnings = [];
+            $imageWarnings=[];if(!empty($article['continuation_truncated']))$imageWarnings[]='The source API continuation safety bound was reached; compare the draft with the source for additional categories or files.';if(!empty($article['content_truncated']))$imageWarnings[]='The source article exceeded the safe import-size bound and was truncated; merge the remaining source manually before review.';
             $importedImages = [];
             $imageService = new ImageService($this->pdo);
-            foreach (array_slice($article['images'] ?? [], 0, 3) as $candidate) {
+            $imageLimit=max(1,min(40,(int)setting($this->pdo,'import_max_reusable_images','40')));
+            $detectedBeforeTransfer=(int)($article['detected_image_count']??count($article['images']??[]));$missingMetadata=max(0,min($detectedBeforeTransfer,$imageLimit)-count($article['images']??[]));if($missingMetadata>0)$imageWarnings[]=$missingMetadata.' detected file(s) were skipped because complete reusable-license metadata or a supported rendition was unavailable.';
+            foreach(array_slice($article['images']??[],0,$imageLimit) as $candidate){
                 if (empty($candidate['url'])) {
                     continue;
                 }
-                if (($candidate['reusable'] ?? true) === false && $license !== 'Permission obtained') {
+                if (($candidate['reusable'] ?? false) !== true) {
                     $imageWarnings[] = 'An image marked “' . ($candidate['license'] ?: 'restricted') . '” was skipped because reusable rights were not verified.';
                     continue;
                 }
                 try {
                     $imageResult = $imageService->importRemote((string) $candidate['url'], (string) ($candidate['title'] ?: $article['title']), [
-                        'source_page_url' => $sourceUrl,
+                        'source_page_url' => (string) ($candidate['source_page_url'] ?? $sourceUrl),
                         'attribution' => $candidate['attribution'] ?? ($article['title'] . ' — ' . $host),
                         'license_name' => $candidate['license'] ?? $license,
                     ]);
                     $imageResult['caption'] = (string) ($candidate['title'] ?: $article['title']);
                     $imageResult['license'] = (string) ($candidate['license'] ?? $license);
                     $imageResult['source_url'] = (string) $candidate['url'];
+                    $imageResult['source_title'] = (string) ($candidate['source_title'] ?? $candidate['title'] ?? '');
                     $importedImages[] = $imageResult;
                 } catch (Throwable $exception) {
                     $imageWarnings[] = 'One detected image could not be transferred: ' . $exception->getMessage();
@@ -59,19 +62,27 @@ final class ImportService
             }
             $content = $this->buildWikiSource($article, $sourceUrl, $license, $importedImages);
             $leadImage = $importedImages[0] ?? null;
-            $update = $this->pdo->prepare("UPDATE remote_imports SET source_title = ?, source_image_url = ?, imported_image_url = ?, error_message = ?, status = 'ready', completed_at = UTC_TIMESTAMP() WHERE id = ?");
+            preg_match_all('/<ref\b/iu', $content, $referenceMatches);
+            $categoryCount = count(extract_categories($content));
+            $detectedImageCount = (int)($article['detected_image_count']??count($article['images']??[]));
+            if ($detectedImageCount > $imageLimit) $imageWarnings[] = ($detectedImageCount - $imageLimit) . ' additional source image(s) exceeded the configured per-import safety bound.';
+            $update = $this->pdo->prepare("UPDATE remote_imports SET source_title=?,source_type=?,source_revision=?,source_revision_timestamp=?,source_api_url=?,source_content_hash=?,source_image_url=?,imported_image_url=?,imported_references=?,imported_categories=?,detected_images=?,imported_images=?,skipped_images=?,error_message=?,status='ready',completed_at=UTC_TIMESTAMP() WHERE id=?");
             $update->execute([
-                mb_substr((string) $article['title'], 0, 255),
+                mb_substr((string) $article['title'], 0, 255), mb_substr((string) ($article['source_type'] ?? ''), 0, 50) ?: null,
+                mb_substr((string) ($article['revision'] ?? ''), 0, 100) ?: null, $article['revision_timestamp'] ?? null,
+                mb_substr((string)($article['api_url']??''),0,1000)?:null,(string)($article['source_content_hash']??hash('sha256',(string)($article['text']??''))),
                 mb_substr((string) ($leadImage['source_url'] ?? ($article['image'] ?? '')), 0, 1000) ?: null,
                 mb_substr((string) ($leadImage['url'] ?? ''), 0, 1000) ?: null,
-                mb_substr(implode(' ', $imageWarnings), 0, 500) ?: null,
-                $importId,
+                count($referenceMatches[0] ?? []), $categoryCount, $detectedImageCount, count($importedImages), max(0, $detectedImageCount-count($importedImages)),
+                mb_substr(implode(' ', $imageWarnings), 0, 500) ?: null, $importId,
             ]);
             log_activity($this->pdo, 'encyclopedia.imported', 'remote_import', $importId, ['host' => $host, 'images_imported' => count($importedImages)]);
             return [
                 'import_id' => $importId, 'title' => $article['title'], 'content' => $content,
-                'image' => $leadImage, 'images' => $importedImages, 'warning' => implode(' ', $imageWarnings), 'source_url' => $sourceUrl,
-                'source_type' => $article['source_type'],
+                'image'=>$leadImage,'images'=>$importedImages,'warning'=>mb_substr(implode(' ',$imageWarnings),0,2000),'source_url' => $sourceUrl,
+                'source_type' => $article['source_type'], 'revision' => $article['revision'] ?? null,
+                'reference_count' => count($referenceMatches[0] ?? []), 'category_count' => $categoryCount,
+                'detected_image_count' => $detectedImageCount, 'imported_image_count' => count($importedImages),
             ];
         } catch (Throwable $exception) {
             $this->pdo->prepare("UPDATE remote_imports SET status = 'failed', error_message = ?, completed_at = UTC_TIMESTAMP() WHERE id = ?")->execute([mb_substr($exception->getMessage(), 0, 500), $importId]);
@@ -87,28 +98,55 @@ final class ImportService
     {
         $parts = parse_url($sourceUrl);
         $path = rawurldecode((string) ($parts['path'] ?? ''));
-        if (!preg_match('~/(?:wiki|view)/(.+)$~u', $path, $match)) {
-            return null;
-        }
-        $pageTitle = str_replace('_', ' ', trim($match[1], '/'));
+        if (preg_match('~/(?:wiki|view)/(.+)$~u',$path,$match)) $pageTitle=str_replace('_',' ',trim($match[1],'/'));
+        elseif(preg_match('~/(?:w/)?index\.php$~i',$path)){parse_str((string)($parts['query']??''),$sourceQuery);$pageTitle=str_replace('_',' ',trim((string)($sourceQuery['title']??'')));}
+        else return null;
         if ($pageTitle === '' || preg_match('/^(?:Special|File|Category|User|Talk):/i', $pageTitle)) {
             throw new EncyclopediaImportException('Choose a standard encyclopedia article page.');
         }
         $query = http_build_query([
             'action' => 'query', 'format' => 'json', 'formatversion' => '2', 'redirects' => '1',
-            'prop' => 'extracts|pageimages|info|images', 'explaintext' => '1', 'exsectionformat' => 'wiki',
-            'piprop' => 'name|original|thumbnail', 'pithumbsize' => '1400', 'imlimit' => '8', 'inprop' => 'url', 'titles' => $pageTitle,
+            'prop' => 'revisions|extracts|pageimages|info|images|categories', 'explaintext' => '1', 'exsectionformat' => 'wiki',
+            'rvprop' => 'ids|timestamp|content', 'rvslots' => 'main', 'rvlimit' => '1',
+            'piprop' => 'name|original|thumbnail', 'pithumbsize' => '1400', 'imlimit' => 'max', 'cllimit' => 'max', 'clshow' => '!hidden', 'inprop' => 'url', 'titles' => $pageTitle,
         ], '', '&', PHP_QUERY_RFC3986);
-        $apiUrl = 'https://' . mb_strtolower((string) $parts['host']) . '/w/api.php?' . $query;
-        try {
-            $json = (new RemoteFetcher())->fetchJson($apiUrl, 4 * 1024 * 1024);
-        } catch (Throwable) {
-            return null;
-        }
+        $apiHost='https://'.mb_strtolower((string)$parts['host']);$apiBases=[$apiHost.'/w/api.php',$apiHost.'/api.php'];
+        $json=null;$apiUrl='';$apiBase='';
+        foreach($apiBases as $candidateBase){try{$candidateUrl=$candidateBase.'?'.$query;$candidateJson=(new RemoteFetcher())->fetchJson($candidateUrl,4*1024*1024,mb_strtolower((string)$parts['host']));if(isset($candidateJson['query']['pages'])){$json=$candidateJson;$apiUrl=$candidateUrl;$apiBase=$candidateBase;break;}}catch(Throwable){}}
+        if(!is_array($json))return null;
         $page = $json['query']['pages'][0] ?? null;
-        if (!is_array($page) || isset($page['missing']) || empty($page['extract'])) {
+        $initialRevision=is_array($page)?($page['revisions'][0]??[]):[];
+        $initialSource=(string)($initialRevision['slots']['main']['content']??$initialRevision['content']??'');
+        if (!is_array($page) || isset($page['missing']) || (trim($initialSource)===''&&empty($page['extract']))) {
             return null;
         }
+        // MediaWiki returns long image/category lists in continuation pages. Follow
+        // every bounded continuation token so source metadata is not silently lost.
+        $continuation = is_array($json['continue'] ?? null) ? $json['continue'] : [];
+        $continuationRequests = 0;
+        while ($continuation && $continuationRequests < 50 && (count($page['images'] ?? []) < 5000 || count($page['categories'] ?? []) < 5000)) {
+            $continuedParams = [
+                'action' => 'query', 'format' => 'json', 'formatversion' => '2', 'redirects' => '1',
+                'prop' => 'revisions|extracts|pageimages|info|images|categories', 'explaintext' => '1', 'exsectionformat' => 'wiki',
+                'rvprop' => 'ids|timestamp|content', 'rvslots' => 'main', 'rvlimit' => '1',
+                'piprop' => 'name|original|thumbnail', 'pithumbsize' => '1400', 'imlimit' => 'max', 'cllimit' => 'max', 'clshow' => '!hidden', 'inprop' => 'url', 'titles' => $pageTitle,
+            ];
+            foreach ($continuation as $key => $value) {
+                if (is_string($key) && (is_scalar($value) || $value === null)) $continuedParams[$key] = (string) $value;
+            }
+            $continuedUrl = $apiBase . '?' . http_build_query($continuedParams, '', '&', PHP_QUERY_RFC3986);
+            $continued = (new RemoteFetcher())->fetchJson($continuedUrl, 4 * 1024 * 1024, mb_strtolower((string)$parts['host']));
+            $continuedPage = $continued['query']['pages'][0] ?? null;
+            if (!is_array($continuedPage)) break;
+            foreach (['images', 'categories'] as $collection) {
+                if (!empty($continuedPage[$collection]) && is_array($continuedPage[$collection])) {
+                    $page[$collection] = array_merge($page[$collection] ?? [], $continuedPage[$collection]);
+                }
+            }
+            $continuation = is_array($continued['continue'] ?? null) ? $continued['continue'] : [];
+            $continuationRequests++;
+        }
+        $continuationTruncated=(bool)$continuation;
         $originalImage = $page['original']['source'] ?? null;
         $fallbackImage = ($originalImage && !preg_match('/\.svg(?:\?|$)/i', $originalImage)) ? $originalImage : ($page['thumbnail']['source'] ?? $originalImage);
         $fileTitles = [];
@@ -121,17 +159,16 @@ final class ImportService
                 $fileTitles[] = $fileTitle;
             }
         }
-        $fileTitles = array_slice(array_values(array_unique($fileTitles)), 0, 8);
+        $fileTitleLimit = max(1, min(40, (int) setting($this->pdo, 'import_max_reusable_images', '40')));
+        $fileTitles=array_values(array_unique($fileTitles));$detectedFileCount=count($fileTitles);
+        $fileTitles = array_slice($fileTitles, 0, $fileTitleLimit);
         $images = [];
         if ($fileTitles) {
             try {
-                $metadataQuery = http_build_query([
-                    'action' => 'query', 'format' => 'json', 'formatversion' => '2',
-                    'prop' => 'imageinfo', 'iiprop' => 'url|extmetadata', 'iiurlwidth' => '1400',
-                    'titles' => implode('|', $fileTitles),
-                ], '', '&', PHP_QUERY_RFC3986);
-                $metadata = (new RemoteFetcher())->fetchJson('https://' . mb_strtolower((string) $parts['host']) . '/w/api.php?' . $metadataQuery, 2 * 1024 * 1024);
-                $metadataPages = $metadata['query']['pages'] ?? [];
+                $metadataPages=[];$fileChunks=[];$fileChunk=[];
+                foreach($fileTitles as $fileTitle){$candidate=array_merge($fileChunk,[$fileTitle]);$candidateQuery=http_build_query(['action'=>'query','format'=>'json','formatversion'=>'2','prop'=>'imageinfo|info','inprop'=>'url','iiprop'=>'url|extmetadata','iiurlwidth'=>'1400','titles'=>implode('|',$candidate)],'','&',PHP_QUERY_RFC3986);if($fileChunk&&strlen($apiBase.'?'.$candidateQuery)>1900){$fileChunks[]=$fileChunk;$fileChunk=[$fileTitle];}else{$fileChunk=$candidate;}}if($fileChunk)$fileChunks[]=$fileChunk;
+                foreach($fileChunks as $fileChunk){$metadataQuery=http_build_query(['action'=>'query','format'=>'json','formatversion'=>'2','prop'=>'imageinfo|info','inprop'=>'url','iiprop'=>'url|extmetadata','iiurlwidth'=>'1400','titles'=>implode('|',$fileChunk)],'','&',PHP_QUERY_RFC3986);try{$metadata=(new RemoteFetcher())->fetchJson($apiBase.'?'.$metadataQuery,2*1024*1024,mb_strtolower((string)$parts['host']));$metadataPages=array_merge($metadataPages,$metadata['query']['pages']??[]);}catch(Throwable){continue;}}
+
                 $fileOrder = array_flip(array_map('mb_strtolower', $fileTitles));
                 usort($metadataPages, static fn(array $a, array $b): int => ($fileOrder[mb_strtolower((string) ($a['title'] ?? ''))] ?? 999) <=> ($fileOrder[mb_strtolower((string) ($b['title'] ?? ''))] ?? 999));
                 foreach ($metadataPages as $filePage) {
@@ -147,11 +184,13 @@ final class ImportService
                     $images[] = [
                         'url' => $fileImage,
                         'title' => mb_substr((string) ($filePage['title'] ?? $page['title']), 0, 255),
+                        'source_title' => (string) ($filePage['title'] ?? ''),
+                        'source_page_url' => (string) ($filePage['canonicalurl'] ?? $filePage['fullurl'] ?? ''),
                         'license' => $imageLicense,
                         'attribution' => mb_substr(trim($artist . ($credit && $credit !== $artist ? ' · ' . $credit : '')), 0, 500) ?: null,
-                        'reusable' => $imageLicense === null || $this->imageLicenseAllowsReuse($imageLicense),
+                        'reusable'=>$imageLicense!==null&&$this->imageLicenseAllowsReuse($imageLicense),
                     ];
-                    if (count($images) >= 3) {
+                    if (count($images) >= 40) {
                         break;
                     }
                 }
@@ -160,26 +199,36 @@ final class ImportService
             }
         }
         if (!$images && $fallbackImage) {
-            $images[] = ['url' => $fallbackImage, 'title' => (string) ($page['title'] ?? $pageTitle), 'license' => null, 'attribution' => null, 'reusable' => true];
+            $images[] = ['url' => $fallbackImage, 'title' => (string) ($page['title'] ?? $pageTitle), 'license' => null, 'attribution' => null, 'reusable' => false];
         }
+        $revision = $page['revisions'][0] ?? [];
+        $rawSource = (string) ($revision['slots']['main']['content'] ?? $revision['content'] ?? '');
+        $text = trim($rawSource !== '' ? $rawSource : (string) $page['extract']);
+        $categoryNames = [];
+        foreach ($page['categories'] ?? [] as $category) {
+            $name=preg_replace('/^[^:]+:/u','',(string)($category['title']??''));
+            if ($name !== '') $categoryNames[] = $name;
+        }
+        foreach ($categoryNames as $categoryName) {
+            if (!preg_match('/\[\[Category:\s*' . preg_quote($categoryName, '/') . '/iu', $text)) $text .= "\n[[Category:" . $categoryName . ']]';
+        }
+        $revisionUnix=!empty($revision['timestamp'])?strtotime((string)$revision['timestamp']):false;$contentTruncated=mb_strlen($text)>1000000;
         return [
             'title' => mb_substr(trim((string) ($page['title'] ?? $pageTitle)), 0, 255),
-            'text' => mb_substr(trim((string) $page['extract']), 0, 300000),
-            'description' => '', 'image' => $images[0]['url'] ?? null, 'images' => $images,
+            'text' => mb_substr($text, 0, 1000000), 'revision' => (string) ($revision['revid'] ?? $revision['timestamp'] ?? ''),
+            'description' => '', 'image' => $images[0]['url'] ?? null, 'images' => $images, 'detected_image_count'=>max($detectedFileCount,count($images)),
             'image_license' => $images[0]['license'] ?? null, 'image_attribution' => $images[0]['attribution'] ?? null,
-            'source_type' => 'mediawiki',
+            'source_type'=>'mediawiki','api_url'=>$apiUrl,'continuation_truncated'=>$continuationTruncated,'content_truncated'=>$contentTruncated,'source_content_hash'=>hash('sha256',$rawSource!==''?$rawSource:$text),
+            'revision_timestamp'=>$revisionUnix!==false?gmdate('Y-m-d H:i:s',$revisionUnix):null,
         ];
     }
 
     private function imageLicenseAllowsReuse(string $license): bool
     {
-        $license = mb_strtolower($license);
-        foreach (['cc by', 'creative commons', 'cc0', 'public domain', 'gfdl', 'gnu free documentation', 'free art'] as $allowed) {
-            if (str_contains($license, $allowed)) {
-                return true;
-            }
-        }
-        return false;
+        $license=mb_strtolower(trim($license));
+        foreach(['noncommercial','non-commercial','no derivatives','no-derivatives','cc by-nc','cc-by-nc','cc by-nd','cc-by-nd','fair use','all rights reserved'] as $blocked){if(str_contains($license,$blocked))return false;}
+        if(str_contains($license,'cc0')||str_contains($license,'public domain')||str_contains($license,'gfdl')||str_contains($license,'gnu free documentation')||str_contains($license,'free art'))return true;
+        return (bool)preg_match('/(?:cc|creative commons)\s*-?\s*(?:attribution\s*)?(?:by)(?:\s*-?\s*sa)?(?:\s|$|\d)/u',$license);
     }
 
     private function fetchGenericArticle(string $sourceUrl): array
@@ -247,11 +296,12 @@ final class ImportService
         if ($title === '' || mb_strlen($text) < 80) {
             throw new EncyclopediaImportException('This page does not expose enough article content to import.');
         }
+        $contentTruncated=mb_strlen($text)>300000;
         return [
-            'title' => mb_substr($title, 0, 255), 'text' => mb_substr($text, 0, 300000),
+            'title'=>mb_substr($title,0,255),'text'=>mb_substr($text,0,300000),
             'description' => mb_substr($description, 0, 320), 'image' => $image,
-            'images' => $image ? [['url' => $image, 'title' => $title, 'license' => null, 'attribution' => null, 'reusable' => true]] : [],
-            'source_type' => 'open-graph',
+            'images'=>$image?[['url'=>$image,'title'=>$title,'license'=>null,'attribution'=>null,'reusable'=>false]]:[],
+            'source_type'=>'open-graph','content_truncated'=>$contentTruncated,'source_content_hash'=>hash('sha256',$text),
         ];
     }
 
@@ -260,21 +310,32 @@ final class ImportService
         $title = trim(preg_replace('/\s+/u', ' ', str_replace(['|', '}}', ']]', '[['], ['—', '', '', ''], (string) $article['title'])) ?? 'Imported article');
         $safeSourceUrl = str_replace([']', '[', ' '], ['%5D', '%5B', '%20'], $sourceUrl);
         $sourceLabel = parse_url($sourceUrl, PHP_URL_HOST) ?: 'source encyclopedia';
+        $revision = trim((string) ($article['revision'] ?? ''));
+        $revisionTimestamp = trim((string) ($article['revision_timestamp'] ?? ''));
+        $revisionLabel = $revision . ($revisionTimestamp !== '' ? ' @ ' . $revisionTimestamp . ' UTC' : '');
         $blocks = [
-            "{{Note|Imported as a draft from [{$safeSourceUrl} {$sourceLabel}]. License: {$license}. Review every claim, preserve attribution, and add independent reliable sources before publishing.}}",
+            '{{Imported|' . $safeSourceUrl . '|' . $sourceLabel . '|' . str_replace('|', '—', $license) . '|' . str_replace('|', '—', $revisionLabel) . '}}',
+            '{{Warning|Imported content must remain reviewable. Verify references, attribution, neutrality, and media licenses before publication.}}',
         ];
+        $articleText = trim((string) $article['text']);
         foreach ($importedImages as $index => $importedImage) {
             $caption = trim(preg_replace('/\s+/u', ' ', str_replace(['|', ']]', '[['], ['—', '', ''], (string) ($importedImage['caption'] ?? $title))) ?? $title);
             $licenseLabel = trim(str_replace(['|', ']]', '[['], ['—', '', ''], (string) ($importedImage['license'] ?? $license)));
             $position = $index === 0 ? 'right' : 'left';
-            $blocks[] = '[[File:' . $importedImage['url'] . '|alt=' . $caption . '|' . $caption . ' (' . $licenseLabel . ')|' . $position . '|420px]]';
+            $replacement = '[[File:' . $importedImage['url'] . '|alt=' . $caption . '|' . $caption . ' (' . $licenseLabel . ')|' . $position . '|420px]]';
+            $sourceTitle = preg_replace('/^(?:File|Image|চিত্র):/iu','',(string)($importedImage['source_title']??''));
+            $replaced = 0;
+            if ($sourceTitle !== '') {
+                $articleText = preg_replace('/\[\[(?:File|Image|চিত্র):\s*'.preg_quote($sourceTitle,'/') . '(?:\|[^\]]*)?\]\]/iu', $replacement, $articleText, -1, $replaced) ?? $articleText;
+            }
+            if ($replaced === 0) $blocks[] = $replacement;
         }
         if (!empty($article['description'])) {
             $blocks[] = "'''{$title}''' — " . trim((string) $article['description']);
         }
-        $blocks[] = trim((string) $article['text']);
+        $blocks[] = $articleText;
         $blocks[] = "== Sources ==\n<ref>[{$safeSourceUrl} {$title}], {$sourceLabel}. Imported under {$license}; accessed " . gmdate('j F Y') . ".</ref>\n{{reflist}}";
         $blocks[] = '[[Category:Imported drafts]]';
-        return implode("\n\n", array_filter($blocks));
+        return implode("\n\n",array_filter($blocks));
     }
 }

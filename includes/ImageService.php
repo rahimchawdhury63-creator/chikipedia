@@ -19,8 +19,9 @@ final class ImageService
         }
         $cached = $this->pdo->prepare('SELECT i.id, i.file_path, i.width, i.height FROM media_sources ms JOIN images i ON i.id = ms.image_id WHERE ms.source_url = ? ORDER BY ms.id DESC LIMIT 1');
         $cached->execute([$url]);
-        if ($image = $cached->fetch()) {
-            return ['id' => (int) $image['id'], 'url' => $image['file_path'], 'location' => $image['file_path'], 'width' => $image['width'], 'height' => $image['height'], 'cached' => true, 'alt' => $altText];
+        if($image=$cached->fetch()){
+            if(!empty($source['license_name'])){$known=$this->pdo->prepare('SELECT 1 FROM media_sources WHERE image_id=? AND source_url=? AND license_name=? LIMIT 1');$known->execute([$image['id'],$url,mb_substr((string)$source['license_name'],0,100)]);if(!$known->fetchColumn()){$this->pdo->prepare('INSERT INTO media_sources (image_id,source_url,source_page_url,source_host,attribution,license_name) VALUES (?,?,?,?,?,?)')->execute([$image['id'],$url,mb_substr((string)($source['source_page_url']??''),0,1000)?:null,mb_substr((string)parse_url($url,PHP_URL_HOST),0,190),mb_substr((string)($source['attribution']??''),0,500)?:null,mb_substr((string)$source['license_name'],0,100)]);}}
+            return ['id'=>(int)$image['id'],'url'=>$image['file_path'],'location'=>$image['file_path'],'width'=>$image['width'],'height'=>$image['height'],'cached'=>true,'alt'=>$altText];
         }
         $download = (new RemoteFetcher())->fetch($url, self::ALLOWED_MIME, self::MAX_BYTES);
         $dimensions = @getimagesizefromstring($download['body']);
@@ -28,7 +29,9 @@ final class ImageService
             throw new ImageUploadException('Remote images must be valid and at least 120 by 120 pixels.');
         }
         $name = pathinfo((string) parse_url($download['final_url'], PHP_URL_PATH), PATHINFO_FILENAME) ?: 'encyclopedia-image';
-        $source['source_url'] = $download['final_url'];
+        // Keep the canonical source URL supplied by the encyclopedia; redirects
+        // are transport details and must not erase attribution or cache identity.
+        $source['source_url'] = $source['source_url'] ?? $url;
         return $this->uploadBinary($download['body'], $download['content_type'], $name, $altText, $source);
     }
 

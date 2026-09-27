@@ -16,6 +16,8 @@ $flashes = pull_flashes();
 header('X-Content-Type-Options: nosniff');
 header('Referrer-Policy: strict-origin-when-cross-origin');
 header('Permissions-Policy: camera=(), microphone=(), geolocation=()');
+header('Vary: Cookie');
+header(!empty($page_no_store) ? 'Cache-Control: private, no-store' : 'Cache-Control: private, no-cache, must-revalidate');
 
 $websiteSchema = [
     '@context' => 'https://schema.org',
@@ -46,13 +48,19 @@ $websiteSchema = [
     <meta name="color-scheme" content="light dark">
     <meta name="csrf-token" content="<?= e(csrf_token()) ?>">
     <link rel="canonical" href="<?= e($page_canonical) ?>">
+    <link rel="dns-prefetch" href="//i.ibb.co">
+    <link rel="preconnect" href="https://i.ibb.co" crossorigin>
+    <link rel="preload" href="/img/brand/logo.svg" as="image" type="image/svg+xml">
     <link rel="alternate" type="application/rss+xml" title="<?= e(SITE_NAME) ?> recent articles" href="<?= e(site_url('/feed.xml')) ?>">
     <link rel="sitemap" type="application/xml" href="<?= e(site_url('/sitemap.xml')) ?>">
     <link rel="manifest" href="/manifest.webmanifest">
     <link rel="icon" href="/img/brand/logo.svg" type="image/svg+xml">
     <link rel="icon" href="/img/icon/favicon.ico" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/img/icon/favicon-32x32.png">
-    <link rel="apple-touch-icon" href="/img/icon/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/img/icon/favicon-16x16.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/img/icon/apple-touch-icon.png">
+    <link rel="mask-icon" href="/img/icon/safari-pinned-tab.svg" color="#2a4b8d">
+    <meta name="application-name" content="<?=e(SITE_NAME)?>">
     <meta property="og:site_name" content="<?= e(SITE_NAME) ?>">
     <meta property="og:type" content="<?= e($page_type) ?>">
     <meta property="og:title" content="<?= e($page_title) ?>">
@@ -66,7 +74,7 @@ $websiteSchema = [
     <meta name="twitter:title" content="<?= e($page_title) ?>">
     <meta name="twitter:description" content="<?= e($page_description) ?>">
     <meta name="twitter:image" content="<?= e($page_image) ?>">
-    <link rel="stylesheet" href="/assets/css/app.css?v=6">
+    <link rel="stylesheet" href="/assets/css/app.css?v=7">
     <script type="application/ld+json"><?= json_encode($websiteSchema, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG) ?></script>
 </head>
 <body class="<?= e($body_class) ?>">
@@ -78,7 +86,7 @@ $websiteSchema = [
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
         </button>
         <a class="brand" href="/" aria-label="<?= e(SITE_NAME) ?> home">
-            <img class="brand-logo" src="/img/brand/logo.svg" width="42" height="42" alt="">
+            <img class="brand-logo" src="/img/brand/logo.svg" width="42" height="42" alt="" fetchpriority="high">
             <span class="brand-copy"><strong>BanglaVerse</strong><small>WIKI · মুক্ত বিশ্বকোষ</small></span>
         </a>
         <form class="header-search" action="/search" method="get" role="search" data-search-form>
@@ -91,6 +99,7 @@ $websiteSchema = [
         </form>
         <nav class="header-actions" aria-label="Account">
             <a class="icon-link desktop-only" href="/community" title="Community portal">Community</a>
+            <a class="icon-link desktop-only" href="/events" title="Community events">Events</a>
             <a class="icon-link desktop-only" href="/special/recent" title="Recent changes">Recent changes</a>
             <?php if (is_logged_in()): ?>
                 <a class="button button-primary desktop-create" href="/create">Create article</a>
@@ -117,6 +126,8 @@ $websiteSchema = [
         <a href="/special/random">Random article</a>
         <a href="/categories">Categories</a>
         <a href="/community">Community portal</a>
+        <a href="/events">Community events</a>
+        <a href="/bots/requests">Bot approval requests</a>
         <a href="/policies">Policies &amp; guidelines</a>
         <?php if (is_logged_in()): ?>
             <a href="/create">Create article</a>

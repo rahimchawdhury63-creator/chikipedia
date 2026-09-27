@@ -1,4 +1,4 @@
--- BanglaVerseWiki 4 fresh-install schema
+-- BanglaVerseWiki 5 schema v9
 -- MySQL 5.7+ / MariaDB 10.3+, utf8mb4, shared-hosting friendly.
 SET NAMES utf8mb4;
 SET time_zone = '+00:00';
@@ -116,7 +116,9 @@ CREATE TABLE IF NOT EXISTS indexing_submissions (
 CREATE TABLE IF NOT EXISTS remote_imports (
  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, user_id BIGINT UNSIGNED NULL, article_id BIGINT UNSIGNED NULL,
  source_url VARCHAR(1000) NOT NULL, source_host VARCHAR(190) NOT NULL, source_title VARCHAR(255) NULL,
- source_license VARCHAR(100) NULL, source_image_url VARCHAR(1000) NULL, imported_image_url VARCHAR(1000) NULL,
+ source_license VARCHAR(100) NULL, source_type VARCHAR(50) NULL, source_revision VARCHAR(100) NULL, source_revision_timestamp DATETIME NULL,
+ source_api_url VARCHAR(1000) NULL, source_content_hash CHAR(64) NULL, source_image_url VARCHAR(1000) NULL, imported_image_url VARCHAR(1000) NULL,
+ imported_references INT UNSIGNED NOT NULL DEFAULT 0, imported_categories INT UNSIGNED NOT NULL DEFAULT 0, detected_images INT UNSIGNED NOT NULL DEFAULT 0, imported_images INT UNSIGNED NOT NULL DEFAULT 0, skipped_images INT UNSIGNED NOT NULL DEFAULT 0,
  status VARCHAR(30) NOT NULL DEFAULT 'started', error_message VARCHAR(500) NULL,
  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at DATETIME NULL,
  INDEX idx_import_user_time (user_id, created_at), INDEX idx_import_status_time (status, created_at), INDEX idx_import_host (source_host)
@@ -145,24 +147,71 @@ CREATE TABLE IF NOT EXISTS protection_log (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE TABLE IF NOT EXISTS bots (
  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, name VARCHAR(80) NOT NULL, slug VARCHAR(100) NOT NULL UNIQUE,
- description VARCHAR(500) NULL, status VARCHAR(20) NOT NULL DEFAULT 'active', created_by BIGINT UNSIGNED NULL,
+ description VARCHAR(500) NULL, status VARCHAR(20) NOT NULL DEFAULT 'pending', created_by BIGINT UNSIGNED NULL, user_id BIGINT UNSIGNED NULL,
  daily_limit INT UNSIGNED NOT NULL DEFAULT 25, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
  INDEX idx_bot_status (status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE TABLE IF NOT EXISTS bot_jobs (
- id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, bot_id BIGINT UNSIGNED NOT NULL, requested_by BIGINT UNSIGNED NOT NULL,
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, bot_id BIGINT UNSIGNED NOT NULL, requested_by BIGINT UNSIGNED NOT NULL, approval_request_id BIGINT UNSIGNED NULL, execution_approval_request_id BIGINT UNSIGNED NULL, api_token_id BIGINT UNSIGNED NULL,
  title VARCHAR(255) NOT NULL, payload_json MEDIUMTEXT NOT NULL, publication_mode VARCHAR(20) NOT NULL DEFAULT 'pending',
- status VARCHAR(20) NOT NULL DEFAULT 'queued', article_id BIGINT UNSIGNED NULL, error_message VARCHAR(500) NULL,
- scheduled_for DATETIME NOT NULL, attempts TINYINT UNSIGNED NOT NULL DEFAULT 0,
+ status VARCHAR(20) NOT NULL DEFAULT 'queued', article_id BIGINT UNSIGNED NULL, authority_source_id BIGINT UNSIGNED NULL,
+ external_identifier VARCHAR(255) NULL, error_message VARCHAR(500) NULL, scheduled_for DATETIME NOT NULL, attempts TINYINT UNSIGNED NOT NULL DEFAULT 0,
  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, started_at DATETIME NULL, completed_at DATETIME NULL,
- INDEX idx_bot_job_due (status, scheduled_for), INDEX idx_bot_job_bot_time (bot_id, created_at), INDEX idx_bot_job_requester (requested_by, created_at)
+ INDEX idx_bot_job_due (status, scheduled_for), INDEX idx_bot_job_bot_time (bot_id, created_at), INDEX idx_bot_job_requester (requested_by, created_at), INDEX idx_bot_job_approval (approval_request_id, created_at), INDEX idx_bot_job_token (api_token_id, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE TABLE IF NOT EXISTS bot_runs (
  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, bot_id BIGINT UNSIGNED NOT NULL, job_id BIGINT UNSIGNED NULL,
  status VARCHAR(20) NOT NULL, message VARCHAR(500) NULL, started_at DATETIME NOT NULL, finished_at DATETIME NULL,
  INDEX idx_bot_run_bot_time (bot_id, started_at), INDEX idx_bot_run_status (status, started_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS authority_sources (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, name VARCHAR(120) NOT NULL, slug VARCHAR(120) NOT NULL UNIQUE,
+ adapter VARCHAR(40) NOT NULL, base_url VARCHAR(1000) NOT NULL, allowed_host VARCHAR(190) NOT NULL,
+ description VARCHAR(500) NULL, license_name VARCHAR(100) NULL, license_url VARCHAR(1000) NULL, publication_policy VARCHAR(20) NOT NULL DEFAULT 'review',
+ reliability_tier VARCHAR(20) NOT NULL DEFAULT 'authoritative', status VARCHAR(20) NOT NULL DEFAULT 'active',
+ created_by BIGINT UNSIGNED NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, INDEX idx_authority_status (status, adapter)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS article_external_identifiers (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, article_id BIGINT UNSIGNED NOT NULL, authority_source_id BIGINT UNSIGNED NOT NULL,
+ external_identifier VARCHAR(255) NOT NULL, record_url VARCHAR(1000) NOT NULL, record_hash CHAR(64) NULL, adapter_version VARCHAR(40) NULL,
+ retrieved_at DATETIME NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE KEY uq_external_record (authority_source_id, external_identifier), INDEX idx_external_article (article_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS bot_approval_requests (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, bot_id BIGINT UNSIGNED NULL, requested_by BIGINT UNSIGNED NOT NULL,
+ bot_name VARCHAR(80) NOT NULL, task_summary TEXT NOT NULL, source_plan TEXT NOT NULL, sample_output MEDIUMTEXT NULL,
+ code_url VARCHAR(1000) NULL, requested_rate INT UNSIGNED NOT NULL DEFAULT 10, allowed_source_ids VARCHAR(500) NULL, allow_manual_payload TINYINT(1) NOT NULL DEFAULT 0, allow_direct_publish TINYINT(1) NOT NULL DEFAULT 0,
+ status VARCHAR(20) NOT NULL DEFAULT 'pending', closing_notes TEXT NULL, reviewed_by BIGINT UNSIGNED NULL,
+ trial_expires_at DATETIME NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+ INDEX idx_brfa_status (status, created_at), INDEX idx_brfa_requester (requested_by, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS bot_approval_comments (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, request_id BIGINT UNSIGNED NOT NULL, user_id BIGINT UNSIGNED NOT NULL,
+ position VARCHAR(20) NOT NULL DEFAULT 'comment', body TEXT NOT NULL, status VARCHAR(20) NOT NULL DEFAULT 'visible',
+ created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, INDEX idx_brfa_comment (request_id, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS api_tokens (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, user_id BIGINT UNSIGNED NOT NULL, bot_id BIGINT UNSIGNED NULL, approval_request_id BIGINT UNSIGNED NULL, created_by BIGINT UNSIGNED NULL,
+ token_name VARCHAR(100) NOT NULL, token_prefix VARCHAR(16) NOT NULL, token_hash CHAR(64) NOT NULL UNIQUE,
+ scopes VARCHAR(500) NOT NULL, last_used_at DATETIME NULL, expires_at DATETIME NULL, revoked_at DATETIME NULL,
+ created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, INDEX idx_api_token_prefix (token_prefix), INDEX idx_api_token_bot (bot_id, revoked_at), INDEX idx_api_token_approval (approval_request_id, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS community_events (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, title VARCHAR(255) NOT NULL, slug VARCHAR(190) NOT NULL UNIQUE,
+ description TEXT NOT NULL, event_type VARCHAR(40) NOT NULL DEFAULT 'editathon', starts_at DATETIME NOT NULL, ends_at DATETIME NOT NULL,
+ timezone VARCHAR(64) NOT NULL DEFAULT 'UTC', location_name VARCHAR(255) NULL, location_url VARCHAR(1000) NULL,
+ created_by BIGINT UNSIGNED NOT NULL, status VARCHAR(20) NOT NULL DEFAULT 'pending', capacity INT UNSIGNED NULL, reviewed_by BIGINT UNSIGNED NULL, moderation_notes VARCHAR(1000) NULL,
+ created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+ INDEX idx_event_schedule (status, starts_at), INDEX idx_event_creator (created_by, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS event_registrations (
+ event_id BIGINT UNSIGNED NOT NULL, user_id BIGINT UNSIGNED NOT NULL, response VARCHAR(20) NOT NULL DEFAULT 'attending',
+ created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+ PRIMARY KEY (event_id, user_id), INDEX idx_event_response (event_id, response)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS page_redirects (
  source_slug VARCHAR(190) PRIMARY KEY, target_article_id BIGINT UNSIGNED NOT NULL, created_by BIGINT UNSIGNED NULL,
  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, INDEX idx_redirect_target (target_article_id)
@@ -175,7 +224,17 @@ CREATE TABLE IF NOT EXISTS article_links (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 INSERT IGNORE INTO bots (id, name, slug, description, status, daily_limit)
-VALUES (1, 'BanglaVerseBot', 'banglaversebot', 'Creates administrator-approved, source-backed structured encyclopedia drafts and articles.', 'active', 25);
+VALUES (1, 'BanglaVerseBot', 'banglaversebot', 'Creates BRFA-approved, source-backed structured encyclopedia drafts and articles.', 'pending', 25);
+
+INSERT IGNORE INTO authority_sources (id, name, slug, adapter, base_url, allowed_host, description, license_name, license_url, publication_policy) VALUES
+ (1, 'Wikidata', 'wikidata', 'wikidata', 'https://www.wikidata.org/wiki/Special:EntityData/{id}.json', 'www.wikidata.org', 'Structured identifiers and claims maintained by the Wikimedia community.', 'CC0 1.0', 'https://creativecommons.org/publicdomain/zero/1.0/', 'review'),
+ (2, 'GBIF Species', 'gbif', 'gbif', 'https://api.gbif.org/v1/species/{id}', 'api.gbif.org', 'Global Biodiversity Information Facility taxonomic backbone.', 'CC BY 4.0', 'https://www.gbif.org/terms', 'review'),
+ (3, 'OpenAlex Works', 'openalex', 'openalex', 'https://api.openalex.org/works/{id}', 'api.openalex.org', 'Open catalog of scholarly works and research entities.', 'CC0 1.0', 'https://creativecommons.org/publicdomain/zero/1.0/', 'review'),
+ (4, 'Crossref', 'crossref', 'crossref', 'https://api.crossref.org/works/{id}', 'api.crossref.org', 'DOI registration metadata from scholarly publishers.', 'Crossref metadata terms', 'https://www.crossref.org/documentation/retrieve-metadata/rest-api/rest-api-metadata-license-information/', 'review'),
+ (5, 'USGS Earthquake Catalog', 'usgs-earthquakes', 'usgs', 'https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&eventid={id}', 'earthquake.usgs.gov', 'Authoritative United States Geological Survey earthquake event catalog.', 'Public domain', 'https://www.usgs.gov/information-policies-and-instructions/copyrights-and-credits', 'review'),
+ (6, 'World Bank Countries and Economies', 'world-bank-countries', 'worldbank', 'https://api.worldbank.org/v2/country/{id}?format=json', 'api.worldbank.org', 'World Bank geographic, regional, and economic classification records.', 'CC BY 4.0', 'https://www.worldbank.org/en/about/legal/terms-of-use-for-datasets', 'direct'),
+ (7, 'NASA Exoplanet Archive', 'nasa-exoplanet-archive', 'nasa_exoplanet', 'https://exoplanetarchive.ipac.caltech.edu/TAP/sync?query=select%20pl_name%2Chostname%2Cdisc_year%2Cdiscoverymethod%2Cpl_orbper%2Cpl_rade%2Cpl_bmasse%2Cpl_eqt%2Csy_dist%20from%20pscomppars%20where%20pl_name%3D%27{id}%27&format=json', 'exoplanetarchive.ipac.caltech.edu', 'NASA catalog of confirmed planets and planetary-system parameters.', 'Public domain / NASA terms', 'https://exoplanetarchive.ipac.caltech.edu/docs/acknowledge.html', 'review'),
+ (8, 'World Bank Indicators', 'world-bank-indicators', 'worldbank_indicator', 'https://api.worldbank.org/v2/country/{country}/indicator/{indicator}?format=json&mrnev=1', 'api.worldbank.org', 'Latest observations from World Bank Open Data statistical indicators.', 'CC BY 4.0', 'https://www.worldbank.org/en/about/legal/terms-of-use-for-datasets', 'review');
 
 INSERT IGNORE INTO settings (setting_key, setting_value, is_public) VALUES
  ('site_tagline', 'A free, community-built encyclopedia for everyone.', 1),
@@ -183,7 +242,7 @@ INSERT IGNORE INTO settings (setting_key, setting_value, is_public) VALUES
  ('default_meta_description', 'BanglaVerseWiki is a free, community-built encyclopedia for Bengali knowledge, culture, history and ideas.', 1),
  ('remote_import_enabled', '1', 1), ('indexnow_interval_minutes', '50', 1),
  ('bot_scheduler_enabled', '1', 0), ('bot_default_mode', 'pending', 0),
- ('schema_version', '8', 0);
+ ('schema_version', '9', 0), ('default_timezone', 'Asia/Dhaka', 1), ('import_max_reusable_images', '40', 0);
 
 INSERT IGNORE INTO scheduled_tasks (task_name, interval_seconds, next_run_at, status) VALUES
  ('indexnow_full_refresh', 3000, UTC_TIMESTAMP(), 'idle'),

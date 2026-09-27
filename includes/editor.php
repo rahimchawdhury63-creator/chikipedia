@@ -1,6 +1,6 @@
 <?php
 declare(strict_types=1);
-$page_scripts = ['/assets/js/editor.js?v=6'];
+$page_scripts = ['/assets/js/editor.js?v=7'];
 $page_robots = 'noindex,nofollow';
 require APP_ROOT . '/includes/header.php';
 ?>
@@ -37,7 +37,7 @@ require APP_ROOT . '/includes/header.php';
                     <button type="button" title="Infobox" data-template="{{Infobox\n| title = Article title\n| image = \n| caption = \n| type = \n| location = \n}}" data-visual-action="template">Info</button>
                     <button type="button" title="Table" data-template="{|\n|+ Table title\n|-\n! Heading 1 !! Heading 2\n|-\n| Cell 1 || Cell 2\n|}" data-visual-action="template">Table</button>
                     <button type="button" title="Upload image" data-image-upload>Image</button>
-                    <button type="button" title="Import a licensed encyclopedia article and transfer its reusable images to ImgBB" data-article-import>Import</button>
+                    <?php if(!$articleId):?><button type="button" title="Import a licensed encyclopedia article and transfer its reusable images to ImgBB" data-article-import>Import</button><?php endif;?>
                 </div>
                 <div class="toolbar-group editor-history-tools">
                     <button type="button" title="Undo" data-editor-history="undo">↶</button>

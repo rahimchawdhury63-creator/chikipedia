@@ -152,6 +152,26 @@
         if (!window.confirm(element.dataset.confirm || 'Are you sure?')) event.preventDefault();
     }));
 
+    // Database timestamps are UTC. Present exact times in the reader's locale while
+    // retaining machine-readable UTC values for history, audits, and structured data.
+    const timezoneSelect=$('[data-timezone-select]');
+    if(timezoneSelect){const browserZone=Intl.DateTimeFormat().resolvedOptions().timeZone;if(browserZone&&[...timezoneSelect.options].some(option=>option.value===browserZone))timezoneSelect.value=browserZone;}
+
+    $$('[data-utc-time]').forEach(element => {
+        const date = new Date(element.dataset.utcTime);
+        if (Number.isNaN(date.getTime())) return;
+        const exact = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short', timeZoneName: 'short' }).format(date);
+        element.title = exact;
+        if (!element.dataset.relative) element.textContent = exact;
+        else {
+            const seconds = Math.round((date.getTime() - Date.now()) / 1000);
+            const units = [[31536000,'year'],[2592000,'month'],[604800,'week'],[86400,'day'],[3600,'hour'],[60,'minute']];
+            const formatter = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+            const selected = units.find(([size]) => Math.abs(seconds) >= size);
+            element.textContent = selected ? formatter.format(Math.round(seconds / selected[0]), selected[1]) : 'just now';
+        }
+    });
+
     if ('serviceWorker' in navigator && location.protocol === 'https:') {
         window.addEventListener('load', () => navigator.serviceWorker.register('/service-worker.js').catch(() => {}));
     }

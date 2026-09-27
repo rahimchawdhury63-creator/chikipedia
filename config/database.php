@@ -7,6 +7,8 @@ declare(strict_types=1);
  */
 
 define('APP_ROOT', dirname(__DIR__));
+// Store and calculate all server timestamps in UTC; browsers localize display.
+date_default_timezone_set('UTC');
 
 $local = [];
 $localFile = __DIR__ . '/local.php';

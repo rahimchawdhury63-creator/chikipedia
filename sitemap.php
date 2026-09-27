@@ -67,7 +67,7 @@ $stmt = $pdo->query("SELECT title, slug, updated_at, featured_image FROM article
 echo '<?xml version="1.0" encoding="UTF-8"?>' . "\n";
 echo '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">';
 if ($articlePage === 1) {
-    foreach ([['/', 'daily', '1.0'], ['/community', 'daily', '0.8'], ['/policies', 'monthly', '0.8'], ['/categories', 'weekly', '0.7'], ['/special/recent', 'hourly', '0.6'], ['/special/popular', 'daily', '0.7']] as [$path, $frequency, $priority]) {
+    foreach ([['/', 'daily', '1.0'], ['/community', 'daily', '0.8'], ['/events', 'daily', '0.75'], ['/bots/requests', 'daily', '0.65'], ['/api/docs', 'monthly', '0.5'], ['/policies', 'monthly', '0.8'], ['/categories', 'weekly', '0.7'], ['/special/recent', 'hourly', '0.6'], ['/special/popular', 'daily', '0.7']] as [$path, $frequency, $priority]) {
         echo '<url><loc>' . $escape(site_url($path)) . '</loc><lastmod>' . gmdate('c') . '</lastmod><changefreq>' . $frequency . '</changefreq><priority>' . $priority . '</priority></url>';
     }
     foreach (array_keys(policy_catalog()) as $policySlug) {
@@ -75,6 +75,8 @@ if ($articlePage === 1) {
     }
     $categories = $pdo->query('SELECT slug FROM categories ORDER BY id')->fetchAll();
     foreach ($categories as $category) echo '<url><loc>' . $escape(site_url('/category/' . rawurlencode($category['slug']))) . '</loc><changefreq>weekly</changefreq><priority>0.6</priority></url>';
+    $events = $pdo->query("SELECT slug,updated_at FROM community_events WHERE status IN ('published','cancelled') AND ends_at>=UTC_TIMESTAMP() ORDER BY starts_at")->fetchAll();
+    foreach($events as $event) echo '<url><loc>'.$escape(site_url('/event/'.rawurlencode($event['slug']))).'</loc><lastmod>'.$escape(gmdate('c',strtotime($event['updated_at']))).'</lastmod><changefreq>weekly</changefreq><priority>0.65</priority></url>';
 }
 while ($article = $stmt->fetch()) {
     echo '<url><loc>' . $escape(site_url('/wiki/' . rawurlencode($article['slug']))) . '</loc><lastmod>' . $escape(gmdate('c', strtotime($article['updated_at']))) . '</lastmod><changefreq>weekly</changefreq><priority>0.8</priority>';

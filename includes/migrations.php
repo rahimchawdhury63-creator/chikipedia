@@ -15,7 +15,7 @@ function run_migrations(PDO $pdo): void
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
     $version = (int) ($pdo->query("SELECT setting_value FROM settings WHERE setting_key = 'schema_version'")->fetchColumn() ?: 0);
-    if ($version >= 8) {
+    if ($version >= 9) {
         return;
     }
 
@@ -240,8 +240,18 @@ function run_migrations(PDO $pdo): void
         source_host VARCHAR(190) NOT NULL,
         source_title VARCHAR(255) NULL,
         source_license VARCHAR(100) NULL,
+        source_type VARCHAR(50) NULL,
+        source_revision VARCHAR(100) NULL,
+        source_revision_timestamp DATETIME NULL,
+        source_api_url VARCHAR(1000) NULL,
+        source_content_hash CHAR(64) NULL,
         source_image_url VARCHAR(1000) NULL,
         imported_image_url VARCHAR(1000) NULL,
+        imported_references INT UNSIGNED NOT NULL DEFAULT 0,
+        imported_categories INT UNSIGNED NOT NULL DEFAULT 0,
+        detected_images INT UNSIGNED NOT NULL DEFAULT 0,
+        imported_images INT UNSIGNED NOT NULL DEFAULT 0,
+        skipped_images INT UNSIGNED NOT NULL DEFAULT 0,
         status VARCHAR(30) NOT NULL DEFAULT 'started',
         error_message VARCHAR(500) NULL,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -304,8 +314,9 @@ function run_migrations(PDO $pdo): void
         name VARCHAR(80) NOT NULL,
         slug VARCHAR(100) NOT NULL UNIQUE,
         description VARCHAR(500) NULL,
-        status VARCHAR(20) NOT NULL DEFAULT 'active',
+        status VARCHAR(20) NOT NULL DEFAULT 'pending',
         created_by BIGINT UNSIGNED NULL,
+        user_id BIGINT UNSIGNED NULL,
         daily_limit INT UNSIGNED NOT NULL DEFAULT 25,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -316,11 +327,16 @@ function run_migrations(PDO $pdo): void
         id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
         bot_id BIGINT UNSIGNED NOT NULL,
         requested_by BIGINT UNSIGNED NOT NULL,
+        approval_request_id BIGINT UNSIGNED NULL,
+        execution_approval_request_id BIGINT UNSIGNED NULL,
+        api_token_id BIGINT UNSIGNED NULL,
         title VARCHAR(255) NOT NULL,
         payload_json MEDIUMTEXT NOT NULL,
         publication_mode VARCHAR(20) NOT NULL DEFAULT 'pending',
         status VARCHAR(20) NOT NULL DEFAULT 'queued',
         article_id BIGINT UNSIGNED NULL,
+        authority_source_id BIGINT UNSIGNED NULL,
+        external_identifier VARCHAR(255) NULL,
         error_message VARCHAR(500) NULL,
         scheduled_for DATETIME NOT NULL,
         attempts TINYINT UNSIGNED NOT NULL DEFAULT 0,
@@ -329,7 +345,9 @@ function run_migrations(PDO $pdo): void
         completed_at DATETIME NULL,
         INDEX idx_bot_job_due (status, scheduled_for),
         INDEX idx_bot_job_bot_time (bot_id, created_at),
-        INDEX idx_bot_job_requester (requested_by, created_at)
+        INDEX idx_bot_job_requester (requested_by, created_at),
+        INDEX idx_bot_job_approval (approval_request_id, created_at),
+        INDEX idx_bot_job_token (api_token_id, created_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
     $pdo->exec("CREATE TABLE IF NOT EXISTS bot_runs (
@@ -342,6 +360,60 @@ function run_migrations(PDO $pdo): void
         finished_at DATETIME NULL,
         INDEX idx_bot_run_bot_time (bot_id, started_at),
         INDEX idx_bot_run_status (status, started_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+    $pdo->exec("CREATE TABLE IF NOT EXISTS authority_sources (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, name VARCHAR(120) NOT NULL, slug VARCHAR(120) NOT NULL UNIQUE,
+        adapter VARCHAR(40) NOT NULL, base_url VARCHAR(1000) NOT NULL, allowed_host VARCHAR(190) NOT NULL,
+        description VARCHAR(500) NULL, license_name VARCHAR(100) NULL, license_url VARCHAR(1000) NULL, publication_policy VARCHAR(20) NOT NULL DEFAULT 'review',
+        reliability_tier VARCHAR(20) NOT NULL DEFAULT 'authoritative', status VARCHAR(20) NOT NULL DEFAULT 'active',
+        created_by BIGINT UNSIGNED NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, INDEX idx_authority_status (status, adapter)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+    $pdo->exec("CREATE TABLE IF NOT EXISTS article_external_identifiers (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, article_id BIGINT UNSIGNED NOT NULL, authority_source_id BIGINT UNSIGNED NOT NULL,
+        external_identifier VARCHAR(255) NOT NULL, record_url VARCHAR(1000) NOT NULL, record_hash CHAR(64) NULL, adapter_version VARCHAR(40) NULL,
+        retrieved_at DATETIME NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_external_record (authority_source_id, external_identifier), INDEX idx_external_article (article_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+    $pdo->exec("CREATE TABLE IF NOT EXISTS bot_approval_requests (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, bot_id BIGINT UNSIGNED NULL, requested_by BIGINT UNSIGNED NOT NULL,
+        bot_name VARCHAR(80) NOT NULL, task_summary TEXT NOT NULL, source_plan TEXT NOT NULL, sample_output MEDIUMTEXT NULL,
+        code_url VARCHAR(1000) NULL, requested_rate INT UNSIGNED NOT NULL DEFAULT 10, allowed_source_ids VARCHAR(500) NULL, allow_manual_payload TINYINT(1) NOT NULL DEFAULT 0, allow_direct_publish TINYINT(1) NOT NULL DEFAULT 0,
+        status VARCHAR(20) NOT NULL DEFAULT 'pending', closing_notes TEXT NULL, reviewed_by BIGINT UNSIGNED NULL,
+        trial_expires_at DATETIME NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_brfa_status (status, created_at), INDEX idx_brfa_requester (requested_by, created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+    $pdo->exec("CREATE TABLE IF NOT EXISTS bot_approval_comments (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, request_id BIGINT UNSIGNED NOT NULL, user_id BIGINT UNSIGNED NOT NULL,
+        position VARCHAR(20) NOT NULL DEFAULT 'comment', body TEXT NOT NULL, status VARCHAR(20) NOT NULL DEFAULT 'visible',
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, INDEX idx_brfa_comment (request_id, created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+    $pdo->exec("CREATE TABLE IF NOT EXISTS api_tokens (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, user_id BIGINT UNSIGNED NOT NULL, bot_id BIGINT UNSIGNED NULL, approval_request_id BIGINT UNSIGNED NULL, created_by BIGINT UNSIGNED NULL,
+        token_name VARCHAR(100) NOT NULL, token_prefix VARCHAR(16) NOT NULL, token_hash CHAR(64) NOT NULL UNIQUE,
+        scopes VARCHAR(500) NOT NULL, last_used_at DATETIME NULL, expires_at DATETIME NULL, revoked_at DATETIME NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, INDEX idx_api_token_prefix (token_prefix), INDEX idx_api_token_bot (bot_id, revoked_at), INDEX idx_api_token_approval (approval_request_id, created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+    $pdo->exec("CREATE TABLE IF NOT EXISTS community_events (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, title VARCHAR(255) NOT NULL, slug VARCHAR(190) NOT NULL UNIQUE,
+        description TEXT NOT NULL, event_type VARCHAR(40) NOT NULL DEFAULT 'editathon', starts_at DATETIME NOT NULL, ends_at DATETIME NOT NULL,
+        timezone VARCHAR(64) NOT NULL DEFAULT 'UTC', location_name VARCHAR(255) NULL, location_url VARCHAR(1000) NULL,
+        created_by BIGINT UNSIGNED NOT NULL, status VARCHAR(20) NOT NULL DEFAULT 'pending', capacity INT UNSIGNED NULL, reviewed_by BIGINT UNSIGNED NULL, moderation_notes VARCHAR(1000) NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_event_schedule (status, starts_at), INDEX idx_event_creator (created_by, created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+    $pdo->exec("CREATE TABLE IF NOT EXISTS event_registrations (
+        event_id BIGINT UNSIGNED NOT NULL, user_id BIGINT UNSIGNED NOT NULL, response VARCHAR(20) NOT NULL DEFAULT 'attending',
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (event_id, user_id), INDEX idx_event_response (event_id, response)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
     $pdo->exec("CREATE TABLE IF NOT EXISTS page_redirects (
@@ -399,6 +471,46 @@ function run_migrations(PDO $pdo): void
             'edit_summary' => 'VARCHAR(255) NULL',
             'is_minor' => 'TINYINT(1) NOT NULL DEFAULT 0',
         ],
+        'bots' => [
+            'user_id' => 'BIGINT UNSIGNED NULL',
+        ],
+        'authority_sources' => [
+            'publication_policy' => "VARCHAR(20) NOT NULL DEFAULT 'review'",
+        ],
+        'api_tokens'=>[
+            'created_by'=>'BIGINT UNSIGNED NULL',
+            'approval_request_id'=>'BIGINT UNSIGNED NULL',
+        ],
+        'bot_approval_requests' => [
+            'allowed_source_ids' => 'VARCHAR(500) NULL',
+            'allow_manual_payload' => 'TINYINT(1) NOT NULL DEFAULT 0',
+        ],
+        'community_events' => [
+            'reviewed_by' => 'BIGINT UNSIGNED NULL',
+            'moderation_notes' => 'VARCHAR(1000) NULL',
+        ],
+        'bot_jobs'=>[
+            'approval_request_id'=>'BIGINT UNSIGNED NULL',
+            'execution_approval_request_id'=>'BIGINT UNSIGNED NULL',
+            'api_token_id'=>'BIGINT UNSIGNED NULL',
+            'authority_source_id'=>'BIGINT UNSIGNED NULL',
+            'external_identifier' => 'VARCHAR(255) NULL',
+        ],
+        'article_external_identifiers'=>[
+            'adapter_version'=>'VARCHAR(40) NULL',
+        ],
+        'remote_imports'=>[
+            'source_type' => 'VARCHAR(50) NULL',
+            'source_revision' => 'VARCHAR(100) NULL',
+            'source_revision_timestamp' => 'DATETIME NULL',
+            'source_api_url' => 'VARCHAR(1000) NULL',
+            'source_content_hash' => 'CHAR(64) NULL',
+            'imported_references' => 'INT UNSIGNED NOT NULL DEFAULT 0',
+            'imported_categories' => 'INT UNSIGNED NOT NULL DEFAULT 0',
+            'detected_images' => 'INT UNSIGNED NOT NULL DEFAULT 0',
+            'imported_images' => 'INT UNSIGNED NOT NULL DEFAULT 0',
+            'skipped_images' => 'INT UNSIGNED NOT NULL DEFAULT 0',
+        ],
         'images' => [
             'imgbb_id' => 'VARCHAR(190) NULL',
             'delete_url' => 'VARCHAR(1000) NULL',
@@ -421,6 +533,9 @@ function run_migrations(PDO $pdo): void
     if (!database_index_exists($pdo, 'search_documents', 'idx_search_title')) {
         $pdo->exec('ALTER TABLE search_documents ADD INDEX idx_search_title (normalized_title(190), updated_at)');
     }
+    if(!database_index_exists($pdo,'bot_jobs','idx_bot_job_approval'))$pdo->exec('ALTER TABLE bot_jobs ADD INDEX idx_bot_job_approval (approval_request_id,created_at)');
+    if(!database_index_exists($pdo,'bot_jobs','idx_bot_job_token'))$pdo->exec('ALTER TABLE bot_jobs ADD INDEX idx_bot_job_token (api_token_id,created_at)');
+    if(!database_index_exists($pdo,'api_tokens','idx_api_token_approval'))$pdo->exec('ALTER TABLE api_tokens ADD INDEX idx_api_token_approval (approval_request_id,created_at)');
 
     // Preserve attribution and publication dates when upgrading the original schema.
     $pdo->exec("UPDATE articles a SET a.author_id = (SELECT r.user_id FROM revisions r WHERE r.article_id = a.id ORDER BY r.id ASC LIMIT 1) WHERE a.author_id IS NULL");
@@ -442,16 +557,29 @@ function run_migrations(PDO $pdo): void
         'indexnow_interval_minutes' => '50',
         'bot_scheduler_enabled' => '1',
         'bot_default_mode' => 'pending',
-        'schema_version' => '8',
+        'default_timezone' => 'Asia/Dhaka',
+        'import_max_reusable_images' => '40',
     ];
     $insert = $pdo->prepare('INSERT IGNORE INTO settings (setting_key, setting_value, is_public) VALUES (?, ?, ?)');
-    $privateSettings = ['bot_scheduler_enabled', 'bot_default_mode', 'schema_version'];
+    $privateSettings = ['bot_scheduler_enabled', 'bot_default_mode', 'import_max_reusable_images', 'schema_version'];
     foreach ($defaults as $key => $value) {
         $insert->execute([$key, $value, in_array($key, $privateSettings, true) ? 0 : 1]);
     }
-    $pdo->prepare("UPDATE settings SET setting_value = '8' WHERE setting_key = 'schema_version'")->execute();
-    $pdo->exec("INSERT IGNORE INTO bots (id, name, slug, description, status, daily_limit) VALUES (1, 'BanglaVerseBot', 'banglaversebot', 'Creates administrator-approved, source-backed structured encyclopedia drafts and articles.', 'active', 25)");
+    $pdo->exec("INSERT IGNORE INTO bots (id, name, slug, description, status, daily_limit) VALUES (1, 'BanglaVerseBot', 'banglaversebot', 'Creates BRFA-approved, source-backed structured encyclopedia drafts and articles.', 'pending', 25)");
+    $pdo->exec("INSERT IGNORE INTO authority_sources (id, name, slug, adapter, base_url, allowed_host, description, license_name, license_url, publication_policy) VALUES
+        (1, 'Wikidata', 'wikidata', 'wikidata', 'https://www.wikidata.org/wiki/Special:EntityData/{id}.json', 'www.wikidata.org', 'Structured identifiers and claims maintained by the Wikimedia community.', 'CC0 1.0', 'https://creativecommons.org/publicdomain/zero/1.0/', 'review'),
+        (2, 'GBIF Species', 'gbif', 'gbif', 'https://api.gbif.org/v1/species/{id}', 'api.gbif.org', 'Global Biodiversity Information Facility taxonomic backbone.', 'CC BY 4.0', 'https://www.gbif.org/terms', 'review'),
+        (3, 'OpenAlex Works', 'openalex', 'openalex', 'https://api.openalex.org/works/{id}', 'api.openalex.org', 'Open catalog of scholarly works and research entities.', 'CC0 1.0', 'https://creativecommons.org/publicdomain/zero/1.0/', 'review'),
+        (4, 'Crossref', 'crossref', 'crossref', 'https://api.crossref.org/works/{id}', 'api.crossref.org', 'DOI registration metadata from scholarly publishers.', 'Crossref metadata terms', 'https://www.crossref.org/documentation/retrieve-metadata/rest-api/rest-api-metadata-license-information/', 'review'),
+        (5, 'USGS Earthquake Catalog', 'usgs-earthquakes', 'usgs', 'https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&eventid={id}', 'earthquake.usgs.gov', 'Authoritative United States Geological Survey earthquake event catalog.', 'Public domain', 'https://www.usgs.gov/information-policies-and-instructions/copyrights-and-credits', 'review'),
+        (6, 'World Bank Countries and Economies', 'world-bank-countries', 'worldbank', 'https://api.worldbank.org/v2/country/{id}?format=json', 'api.worldbank.org', 'World Bank geographic, regional, and economic classification records.', 'CC BY 4.0', 'https://www.worldbank.org/en/about/legal/terms-of-use-for-datasets', 'direct'),
+        (7, 'NASA Exoplanet Archive', 'nasa-exoplanet-archive', 'nasa_exoplanet', 'https://exoplanetarchive.ipac.caltech.edu/TAP/sync?query=select%20pl_name%2Chostname%2Cdisc_year%2Cdiscoverymethod%2Cpl_orbper%2Cpl_rade%2Cpl_bmasse%2Cpl_eqt%2Csy_dist%20from%20pscomppars%20where%20pl_name%3D%27{id}%27&format=json', 'exoplanetarchive.ipac.caltech.edu', 'NASA catalog of confirmed planets and planetary-system parameters.', 'Public domain / NASA terms', 'https://exoplanetarchive.ipac.caltech.edu/docs/acknowledge.html', 'review'),
+        (8, 'World Bank Indicators', 'world-bank-indicators', 'worldbank_indicator', 'https://api.worldbank.org/v2/country/{country}/indicator/{indicator}?format=json&mrnev=1', 'api.worldbank.org', 'Latest observations from World Bank Open Data statistical indicators.', 'CC BY 4.0', 'https://www.worldbank.org/en/about/legal/terms-of-use-for-datasets', 'review')");
+    $pdo->exec("UPDATE bot_approval_requests SET allow_direct_publish=0 WHERE status='trial'");
+    $pdo->exec("UPDATE bots b LEFT JOIN bot_approval_requests br ON br.id=(SELECT MAX(br2.id) FROM bot_approval_requests br2 WHERE br2.bot_id=b.id) SET b.status='pending' WHERE b.status='active' AND (br.id IS NULL OR br.status NOT IN ('approved','trial') OR (br.status='trial' AND (br.trial_expires_at IS NULL OR br.trial_expires_at<=UTC_TIMESTAMP())))");
     $pdo->exec("INSERT IGNORE INTO scheduled_tasks (task_name, interval_seconds, next_run_at, status) VALUES ('indexnow_full_refresh', 3000, UTC_TIMESTAMP(), 'idle'), ('bot_article_queue', 300, UTC_TIMESTAMP(), 'idle')");
+    // Mark completion only after every v9 table, column, seed, and safety repair succeeds.
+    $pdo->prepare("INSERT INTO settings (setting_key,setting_value,is_public) VALUES ('schema_version','9',0) ON DUPLICATE KEY UPDATE setting_value='9',is_public=0")->execute();
 }
 
 function reset_content_if_requested(PDO $pdo): void
@@ -460,7 +588,8 @@ function reset_content_if_requested(PDO $pdo): void
         return;
     }
     $tables = [
-        'article_attributions', 'article_links', 'article_protections', 'protection_log', 'page_redirects',
+        'article_attributions', 'article_external_identifiers', 'article_links', 'article_protections', 'protection_log', 'page_redirects',
+        'event_registrations', 'community_events',
         'article_categories', 'article_likes', 'discussions', 'drafts', 'watchlist', 'reports', 'revisions',
         'search_documents', 'search_queries', 'remote_imports', 'media_sources', 'images', 'activity_log',
         'indexing_submissions', 'bot_runs', 'bot_jobs', 'articles', 'categories',

@@ -93,7 +93,7 @@ final class WikiParser
 
     private function extractTemplates(string $source): string
     {
-        return preg_replace_callback('/\{\{\s*(Infobox|Note|Warning|Quote|Main)\s*(.*?)\}\}/isu', function (array $match): string {
+        return preg_replace_callback('/\{\{\s*(Infobox|Note|Warning|Quote|Main|Imported)\s*(.*?)\}\}/isu', function (array $match): string {
             $type = mb_strtolower($match[1]);
             $parts = array_map('trim', explode('|', ltrim($match[2], '|')));
             if ($type === 'infobox') {
@@ -125,6 +125,15 @@ final class WikiParser
                 return $this->token($html . '</aside>');
             }
             $body = implode(' | ', $parts);
+            if ($type === 'imported') {
+                $sourceUrl = trim((string) ($parts[0] ?? ''));
+                $sourceName = trim((string) ($parts[1] ?? 'Source encyclopedia'));
+                $license = trim((string) ($parts[2] ?? 'source license'));
+                $revision = trim((string) ($parts[3] ?? ''));
+                $link = filter_var($sourceUrl, FILTER_VALIDATE_URL) && str_starts_with($sourceUrl, 'https://')
+                    ? '<a href="' . e($sourceUrl) . '" rel="nofollow noopener noreferrer">' . e($sourceName) . '</a>' : e($sourceName);
+                return $this->token('<aside class="imported-content-tag"><strong>Imported article</strong><span>Source: ' . $link . ' · ' . e($license) . ($revision !== '' ? ' · revision ' . e($revision) : '') . '</span></aside>');
+            }
             if ($type === 'main') {
                 $title = trim($parts[0] ?? '');
                 return $this->token('<div class="wiki-hatnote">Main article: <a href="/wiki/' . e(slugify($title)) . '">' . e($title) . '</a></div>');

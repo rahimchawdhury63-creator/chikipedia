@@ -23,7 +23,14 @@ RewriteRule ^sitemap-([0-9]+)\.xml$ sitemap.php?page=$1 [L,QSA]
 RewriteRule ^feed\.xml$ rss.php [L,QSA]
 RewriteRule ^indexnow-key\.txt$ indexnow.php [L]
 
+# Preserve Bearer credentials on CGI/FastCGI shared hosts.
+RewriteCond %{HTTP:Authorization} .
+RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
 # JSON APIs.
+RewriteRule ^api/v1/bot/articles/?$ pages/bot_api.php [L,QSA]
+RewriteRule ^api/v1/bot/jobs/([0-9]+)/?$ pages/bot_api.php?job_id=$1 [L,QSA]
+RewriteRule ^api/docs/?$ pages/api_docs.php [L,QSA]
 RewriteRule ^api/search/?$ pages/api.php?action=search [L,QSA]
 RewriteRule ^api/preview/?$ pages/api.php?action=preview [L,QSA]
 RewriteRule ^api/autosave/?$ pages/api.php?action=autosave [L,QSA]
@@ -43,6 +50,12 @@ RewriteRule ^categories/?$ pages/categories.php [L,QSA]
 RewriteRule ^special/what-links-here/([^/]+)/?$ pages/what_links.php?slug=$1 [L,QSA]
 RewriteRule ^special/wanted/?$ pages/wanted.php [L,QSA]
 RewriteRule ^special/(recent|popular|random)/?$ pages/special.php?type=$1 [L,QSA]
+RewriteRule ^bots/requests/?$ pages/bots.php?view=list [L,QSA]
+RewriteRule ^bots/request/new/?$ pages/bots.php?view=new [L,QSA]
+RewriteRule ^bots/request/([0-9]+)/?$ pages/bots.php?view=detail&id=$1 [L,QSA]
+RewriteRule ^events/?$ pages/events.php?view=list [L,QSA]
+RewriteRule ^events/create/?$ pages/events.php?view=create [L,QSA]
+RewriteRule ^event/([^/]+)/?$ pages/events.php?view=detail&slug=$1 [L,QSA]
 RewriteRule ^community/?$ pages/community.php [L,QSA]
 RewriteRule ^policies/?$ pages/policies.php [L,QSA]
 RewriteRule ^policy/([^/]+)/?$ pages/policies.php?slug=$1 [L,QSA]
@@ -75,9 +88,6 @@ RewriteRule . 404.php [L]
     Header always set Content-Security-Policy "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'; object-src 'none'; img-src 'self' data: https:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'"
     <FilesMatch "\.(?:css|js|png|jpg|jpeg|gif|webp|ico|svg|webmanifest)$">
         Header set Cache-Control "public, max-age=2592000, immutable"
-    </FilesMatch>
-    <FilesMatch "\.(?:php|xml)$">
-        Header set Cache-Control "no-cache, must-revalidate"
     </FilesMatch>
 </IfModule>
 

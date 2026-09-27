@@ -7,6 +7,10 @@ final class EncyclopediaImportException extends RuntimeException {}
 final class ImportService
 {
     private const LICENSES = ['CC BY-SA 4.0', 'CC BY-SA 3.0', 'CC0 / Public domain', 'Permission obtained'];
+    // Keep the synchronous request below shared-host execution limits. The
+    // complete detected count and skip reason remain visible for manual review.
+    private const SYNCHRONOUS_IMAGE_LIMIT = 3;
+    private ?string $mediaWikiFailure = null;
 
     public function __construct(private PDO $pdo) {}
 
@@ -28,23 +32,18 @@ final class ImportService
         $insert->execute([$userId, mb_substr($sourceUrl, 0, 1000), mb_substr($host, 0, 190), $license, 'fetching']);
         $importId = (int) $this->pdo->lastInsertId();
         try {
-            $article = $this->fetchMediaWikiArticle($sourceUrl);
-            if ($article === null) {
-                $article = $this->fetchGenericArticle($sourceUrl);
-            }
-            $imageWarnings=[];if(!empty($article['continuation_truncated']))$imageWarnings[]='The source API continuation safety bound was reached; compare the draft with the source for additional categories or files.';if(!empty($article['content_truncated']))$imageWarnings[]='The source article exceeded the safe import-size bound and was truncated; merge the remaining source manually before review.';
+            $article=$this->fetchMediaWikiArticle($sourceUrl);$fallbackWarning='';
+            if($article===null){try{$article=$this->fetchGenericArticle($sourceUrl);if($this->mediaWikiFailure)$fallbackWarning='The MediaWiki API was unavailable, so rendered page text was used: '.$this->mediaWikiFailure;}catch(Throwable $fallbackException){if($this->mediaWikiFailure)throw new EncyclopediaImportException('The source API failed ('.$this->mediaWikiFailure.') and the page fallback also failed ('.$fallbackException->getMessage().').',0,$fallbackException);throw $fallbackException;}}
+            $imageWarnings=[];if($fallbackWarning!=='')$imageWarnings[]=$fallbackWarning;if(!empty($article['continuation_truncated']))$imageWarnings[]='The source API continuation safety bound was reached; compare the draft with the source for additional categories or files.';if(!empty($article['content_truncated']))$imageWarnings[]='The source article exceeded the safe import-size bound and was truncated; merge the remaining source manually before review.';
             $importedImages = [];
             $imageService = new ImageService($this->pdo);
-            $imageLimit=max(1,min(40,(int)setting($this->pdo,'import_max_reusable_images','40')));
-            $detectedBeforeTransfer=(int)($article['detected_image_count']??count($article['images']??[]));$missingMetadata=max(0,min($detectedBeforeTransfer,$imageLimit)-count($article['images']??[]));if($missingMetadata>0)$imageWarnings[]=$missingMetadata.' detected file(s) were skipped because complete reusable-license metadata or a supported rendition was unavailable.';
-            foreach(array_slice($article['images']??[],0,$imageLimit) as $candidate){
-                if (empty($candidate['url'])) {
-                    continue;
-                }
-                if (($candidate['reusable'] ?? false) !== true) {
-                    $imageWarnings[] = 'An image marked “' . ($candidate['license'] ?: 'restricted') . '” was skipped because reusable rights were not verified.';
-                    continue;
-                }
+            $candidateLimit=max(1,min(40,(int)setting($this->pdo,'import_max_reusable_images','40')));
+            $detectedBeforeTransfer=(int)($article['detected_image_count']??count($article['images']??[]));$missingMetadata=max(0,min($detectedBeforeTransfer,$candidateLimit)-count($article['images']??[]));if($missingMetadata>0)$imageWarnings[]=$missingMetadata.' detected file(s) were skipped because complete reusable-license metadata or a supported rendition was unavailable.';
+            $deferredReusableImages=0;$imageTransferDeadline=microtime(true)+20.0;
+            foreach(array_slice($article['images']??[],0,$candidateLimit) as $candidate){
+                if(empty($candidate['url']))continue;
+                if(($candidate['reusable']??false)!==true){$imageWarnings[]='An image marked “'.($candidate['license']?:'restricted').'” was skipped because reusable rights were not verified.';continue;}
+                if(count($importedImages)>=self::SYNCHRONOUS_IMAGE_LIMIT||microtime(true)>=$imageTransferDeadline){$deferredReusableImages++;continue;}
                 try {
                     $imageResult = $imageService->importRemote((string) $candidate['url'], (string) ($candidate['title'] ?: $article['title']), [
                         'source_page_url' => (string) ($candidate['source_page_url'] ?? $sourceUrl),
@@ -60,12 +59,13 @@ final class ImportService
                     $imageWarnings[] = 'One detected image could not be transferred: ' . $exception->getMessage();
                 }
             }
+            if($deferredReusableImages>0)$imageWarnings[]=$deferredReusableImages.' additional reusable image(s) were left for manual transfer so the shared-host import request would not time out.';
             $content = $this->buildWikiSource($article, $sourceUrl, $license, $importedImages);
             $leadImage = $importedImages[0] ?? null;
             preg_match_all('/<ref\b/iu', $content, $referenceMatches);
             $categoryCount = count(extract_categories($content));
             $detectedImageCount = (int)($article['detected_image_count']??count($article['images']??[]));
-            if ($detectedImageCount > $imageLimit) $imageWarnings[] = ($detectedImageCount - $imageLimit) . ' additional source image(s) exceeded the configured per-import safety bound.';
+            if($detectedImageCount>$candidateLimit)$imageWarnings[]=($detectedImageCount-$candidateLimit).' additional source image(s) exceeded the metadata inspection safety bound.';
             $update = $this->pdo->prepare("UPDATE remote_imports SET source_title=?,source_type=?,source_revision=?,source_revision_timestamp=?,source_api_url=?,source_content_hash=?,source_image_url=?,imported_image_url=?,imported_references=?,imported_categories=?,detected_images=?,imported_images=?,skipped_images=?,error_message=?,status='ready',completed_at=UTC_TIMESTAMP() WHERE id=?");
             $update->execute([
                 mb_substr((string) $article['title'], 0, 255), mb_substr((string) ($article['source_type'] ?? ''), 0, 50) ?: null,
@@ -106,13 +106,14 @@ final class ImportService
         }
         $query = http_build_query([
             'action' => 'query', 'format' => 'json', 'formatversion' => '2', 'redirects' => '1',
-            'prop' => 'revisions|extracts|pageimages|info|images|categories', 'explaintext' => '1', 'exsectionformat' => 'wiki',
+            'prop' => 'revisions|pageimages|info|images|categories',
             'rvprop' => 'ids|timestamp|content', 'rvslots' => 'main', 'rvlimit' => '1',
             'piprop' => 'name|original|thumbnail', 'pithumbsize' => '1400', 'imlimit' => 'max', 'cllimit' => 'max', 'clshow' => '!hidden', 'inprop' => 'url', 'titles' => $pageTitle,
         ], '', '&', PHP_QUERY_RFC3986);
         $apiHost='https://'.mb_strtolower((string)$parts['host']);$apiBases=[$apiHost.'/w/api.php',$apiHost.'/api.php'];
         $json=null;$apiUrl='';$apiBase='';
-        foreach($apiBases as $candidateBase){try{$candidateUrl=$candidateBase.'?'.$query;$candidateJson=(new RemoteFetcher())->fetchJson($candidateUrl,4*1024*1024,mb_strtolower((string)$parts['host']));if(isset($candidateJson['query']['pages'])){$json=$candidateJson;$apiUrl=$candidateUrl;$apiBase=$candidateBase;break;}}catch(Throwable){}}
+        $apiFailures=[];foreach($apiBases as $candidateBase){try{$candidateUrl=$candidateBase.'?'.$query;$candidateJson=(new RemoteFetcher())->fetchJson($candidateUrl,8*1024*1024,mb_strtolower((string)$parts['host']),8);if(isset($candidateJson['query']['pages'])){$json=$candidateJson;$apiUrl=$candidateUrl;$apiBase=$candidateBase;break;}}catch(Throwable $apiException){$apiFailures[]=$apiException->getMessage();}}
+        if(!is_array($json)&&$apiFailures)$this->mediaWikiFailure=mb_substr(implode(' / ',array_unique($apiFailures)),0,300);
         if(!is_array($json))return null;
         $page = $json['query']['pages'][0] ?? null;
         $initialRevision=is_array($page)?($page['revisions'][0]??[]):[];
@@ -127,15 +128,13 @@ final class ImportService
         while ($continuation && $continuationRequests < 50 && (count($page['images'] ?? []) < 5000 || count($page['categories'] ?? []) < 5000)) {
             $continuedParams = [
                 'action' => 'query', 'format' => 'json', 'formatversion' => '2', 'redirects' => '1',
-                'prop' => 'revisions|extracts|pageimages|info|images|categories', 'explaintext' => '1', 'exsectionformat' => 'wiki',
-                'rvprop' => 'ids|timestamp|content', 'rvslots' => 'main', 'rvlimit' => '1',
-                'piprop' => 'name|original|thumbnail', 'pithumbsize' => '1400', 'imlimit' => 'max', 'cllimit' => 'max', 'clshow' => '!hidden', 'inprop' => 'url', 'titles' => $pageTitle,
+                'prop'=>'images|categories','imlimit'=>'max','cllimit'=>'max','clshow'=>'!hidden','titles'=>$pageTitle,
             ];
             foreach ($continuation as $key => $value) {
                 if (is_string($key) && (is_scalar($value) || $value === null)) $continuedParams[$key] = (string) $value;
             }
             $continuedUrl = $apiBase . '?' . http_build_query($continuedParams, '', '&', PHP_QUERY_RFC3986);
-            $continued = (new RemoteFetcher())->fetchJson($continuedUrl, 4 * 1024 * 1024, mb_strtolower((string)$parts['host']));
+            $continued = (new RemoteFetcher())->fetchJson($continuedUrl,4*1024*1024,mb_strtolower((string)$parts['host']),8);
             $continuedPage = $continued['query']['pages'][0] ?? null;
             if (!is_array($continuedPage)) break;
             foreach (['images', 'categories'] as $collection) {
@@ -167,7 +166,7 @@ final class ImportService
             try {
                 $metadataPages=[];$fileChunks=[];$fileChunk=[];
                 foreach($fileTitles as $fileTitle){$candidate=array_merge($fileChunk,[$fileTitle]);$candidateQuery=http_build_query(['action'=>'query','format'=>'json','formatversion'=>'2','prop'=>'imageinfo|info','inprop'=>'url','iiprop'=>'url|extmetadata','iiurlwidth'=>'1400','titles'=>implode('|',$candidate)],'','&',PHP_QUERY_RFC3986);if($fileChunk&&strlen($apiBase.'?'.$candidateQuery)>1900){$fileChunks[]=$fileChunk;$fileChunk=[$fileTitle];}else{$fileChunk=$candidate;}}if($fileChunk)$fileChunks[]=$fileChunk;
-                foreach($fileChunks as $fileChunk){$metadataQuery=http_build_query(['action'=>'query','format'=>'json','formatversion'=>'2','prop'=>'imageinfo|info','inprop'=>'url','iiprop'=>'url|extmetadata','iiurlwidth'=>'1400','titles'=>implode('|',$fileChunk)],'','&',PHP_QUERY_RFC3986);try{$metadata=(new RemoteFetcher())->fetchJson($apiBase.'?'.$metadataQuery,2*1024*1024,mb_strtolower((string)$parts['host']));$metadataPages=array_merge($metadataPages,$metadata['query']['pages']??[]);}catch(Throwable){continue;}}
+                foreach($fileChunks as $fileChunk){$metadataQuery=http_build_query(['action'=>'query','format'=>'json','formatversion'=>'2','prop'=>'imageinfo|info','inprop'=>'url','iiprop'=>'url|extmetadata','iiurlwidth'=>'1400','titles'=>implode('|',$fileChunk)],'','&',PHP_QUERY_RFC3986);try{$metadata=(new RemoteFetcher())->fetchJson($apiBase.'?'.$metadataQuery,2*1024*1024,mb_strtolower((string)$parts['host']),8);$metadataPages=array_merge($metadataPages,$metadata['query']['pages']??[]);}catch(Throwable){continue;}}
 
                 $fileOrder = array_flip(array_map('mb_strtolower', $fileTitles));
                 usort($metadataPages, static fn(array $a, array $b): int => ($fileOrder[mb_strtolower((string) ($a['title'] ?? ''))] ?? 999) <=> ($fileOrder[mb_strtolower((string) ($b['title'] ?? ''))] ?? 999));
@@ -233,7 +232,7 @@ final class ImportService
 
     private function fetchGenericArticle(string $sourceUrl): array
     {
-        $response = (new RemoteFetcher())->fetch($sourceUrl, ['text/html', 'application/xhtml+xml'], 3 * 1024 * 1024);
+        $response=(new RemoteFetcher())->fetch($sourceUrl,['text/html','application/xhtml+xml'],3*1024*1024,null,10);
         $html = $response['body'];
         $title = '';
         $description = '';

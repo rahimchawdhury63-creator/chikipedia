@@ -1,6 +1,6 @@
 <?php
 declare(strict_types=1);
-$page_scripts = ['/assets/js/editor.js?v=7'];
+$page_scripts = ['/assets/js/editor.js?v=8'];
 $page_robots = 'noindex,nofollow';
 require APP_ROOT . '/includes/header.php';
 ?>

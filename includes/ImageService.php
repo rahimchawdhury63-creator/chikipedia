@@ -23,7 +23,7 @@ final class ImageService
             if(!empty($source['license_name'])){$known=$this->pdo->prepare('SELECT 1 FROM media_sources WHERE image_id=? AND source_url=? AND license_name=? LIMIT 1');$known->execute([$image['id'],$url,mb_substr((string)$source['license_name'],0,100)]);if(!$known->fetchColumn()){$this->pdo->prepare('INSERT INTO media_sources (image_id,source_url,source_page_url,source_host,attribution,license_name) VALUES (?,?,?,?,?,?)')->execute([$image['id'],$url,mb_substr((string)($source['source_page_url']??''),0,1000)?:null,mb_substr((string)parse_url($url,PHP_URL_HOST),0,190),mb_substr((string)($source['attribution']??''),0,500)?:null,mb_substr((string)$source['license_name'],0,100)]);}}
             return ['id'=>(int)$image['id'],'url'=>$image['file_path'],'location'=>$image['file_path'],'width'=>$image['width'],'height'=>$image['height'],'cached'=>true,'alt'=>$altText];
         }
-        $download = (new RemoteFetcher())->fetch($url, self::ALLOWED_MIME, self::MAX_BYTES);
+        $download=(new RemoteFetcher())->fetch($url,self::ALLOWED_MIME,self::MAX_BYTES,null,8);
         $dimensions = @getimagesizefromstring($download['body']);
         if ($dimensions === false || (int) $dimensions[0] < 120 || (int) $dimensions[1] < 120) {
             throw new ImageUploadException('Remote images must be valid and at least 120 by 120 pixels.');
@@ -32,10 +32,10 @@ final class ImageService
         // Keep the canonical source URL supplied by the encyclopedia; redirects
         // are transport details and must not erase attribution or cache identity.
         $source['source_url'] = $source['source_url'] ?? $url;
-        return $this->uploadBinary($download['body'], $download['content_type'], $name, $altText, $source);
+        return $this->uploadBinary($download['body'],$download['content_type'],$name,$altText,$source,15);
     }
 
-    public function uploadBinary(string $binary, string $mime, string $name, string $altText, array $source = []): array
+    public function uploadBinary(string $binary,string $mime,string $name,string $altText,array $source=[],int $transportTimeout=40): array
     {
         if (IMGBB_API_KEY === '') {
             throw new ImageUploadException('Image uploads are not configured.');
@@ -65,7 +65,7 @@ final class ImageService
         $endpoint = 'https://api.imgbb.com/1/upload?key=' . rawurlencode(IMGBB_API_KEY);
         // Required ImgBB contract: key in URL, base64-encoded image in POST body.
         $postBody = http_build_query(['image' => base64_encode($binary), 'name' => $safeName], '', '&', PHP_QUERY_RFC3986);
-        [$status, $responseBody, $transportError] = $this->postToImgBB($endpoint, $postBody);
+        [$status,$responseBody,$transportError]=$this->postToImgBB($endpoint,$postBody,$transportTimeout);
         $data = is_string($responseBody) ? json_decode($responseBody, true) : null;
         if ($status < 200 || $status >= 300 || !is_array($data) || empty($data['success']) || empty($data['data']['url'])) {
             error_log('ImgBB upload failed. HTTP ' . $status . ' ' . $transportError);
@@ -107,14 +107,15 @@ final class ImageService
         ];
     }
 
-    private function postToImgBB(string $endpoint, string $body): array
+    private function postToImgBB(string $endpoint,string $body,int $transportTimeout): array
     {
+        $transportTimeout=max(10,min(40,$transportTimeout));
         if (function_exists('curl_init')) {
             $curl = curl_init($endpoint);
             curl_setopt_array($curl, [
                 CURLOPT_POST => true, CURLOPT_POSTFIELDS => $body,
                 CURLOPT_HTTPHEADER => ['Content-Type: application/x-www-form-urlencoded'],
-                CURLOPT_RETURNTRANSFER => true, CURLOPT_CONNECTTIMEOUT => 8, CURLOPT_TIMEOUT => 40,
+                CURLOPT_RETURNTRANSFER=>true,CURLOPT_CONNECTTIMEOUT=>min(7,$transportTimeout),CURLOPT_TIMEOUT=>$transportTimeout,
                 CURLOPT_SSL_VERIFYPEER => true, CURLOPT_SSL_VERIFYHOST => 2,
             ]);
             $response = curl_exec($curl);
@@ -125,7 +126,7 @@ final class ImageService
         }
         $context = stream_context_create([
             'http' => [
-                'method' => 'POST', 'timeout' => 40, 'ignore_errors' => true,
+                'method'=>'POST','timeout'=>$transportTimeout,'ignore_errors'=>true,
                 'header' => "Content-Type: application/x-www-form-urlencoded\r\nContent-Length: " . strlen($body) . "\r\n",
                 'content' => $body,
             ],

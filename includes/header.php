@@ -74,7 +74,7 @@ $websiteSchema = [
     <meta name="twitter:title" content="<?= e($page_title) ?>">
     <meta name="twitter:description" content="<?= e($page_description) ?>">
     <meta name="twitter:image" content="<?= e($page_image) ?>">
-    <link rel="stylesheet" href="/assets/css/app.css?v=7">
+    <link rel="stylesheet" href="/assets/css/app.css?v=8">
     <script type="application/ld+json"><?= json_encode($websiteSchema, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG) ?></script>
 </head>
 <body class="<?= e($body_class) ?>">

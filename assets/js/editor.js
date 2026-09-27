@@ -25,6 +25,13 @@
     let submitting = false;
 
     const escapeHtml = value => String(value || '').replace(/[&<>"']/g, character => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[character]));
+    const readJsonResponse=async response=>{
+        const body=await response.text();
+        try{return JSON.parse(body);}catch(error){
+            const requestId=response.headers.get('x-request-id');
+            throw new Error(`The server returned HTTP ${response.status} without a valid JSON response${requestId?` (request ${requestId})`:''}. The request may have timed out; please try again.`);
+        }
+    };
     const safeWikiText = value => String(value || '').replace(/[|\[\]\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
     const capsuleLabel = (source, type = 'markup') => {
         if (/^<ref/i.test(source)) return 'Citation';
@@ -328,7 +335,7 @@
         const data = new FormData(); data.set('csrf_token', csrf); data.set('content', editor.value);
         try {
             const response = await fetch('/api/preview', { method: 'POST', body: data, headers: { Accept: 'application/json' } });
-            const result = await response.json();
+            const result=await readJsonResponse(response);
             if (!response.ok) throw new Error(result.error || 'Preview unavailable');
             preview.innerHTML = result.html || '<p class="empty-state">Nothing to preview yet.</p>';
         } catch (error) { preview.innerHTML = `<p class="form-error">${escapeHtml(error.message || 'Preview unavailable')}</p>`; }
@@ -399,7 +406,7 @@
         status.textContent = 'Fetching article and transferring its reusable images to ImgBB…';
         const data = new FormData(importForm); data.set('csrf_token', csrf);
         try {
-            const response = await fetch('/api/import-article', { method: 'POST', body: data, headers: { Accept: 'application/json' } }); const result = await response.json();
+            const response=await fetch('/api/import-article',{method:'POST',body:data,headers:{Accept:'application/json'}});const result=await readJsonResponse(response);
             if (!response.ok) throw new Error(result.error || 'Import failed.');
             title.value = result.title || title.value; editor.value = result.content || ''; if (remoteImportId) remoteImportId.value = String(result.import_id || 0);
             if (summary) summary.value = `Imported a licensed draft from ${new URL(result.source_url).hostname}`;
@@ -436,7 +443,7 @@
             const alt = safeWikiText(image.alt || title.value || 'Imported encyclopedia image');
             const data = new FormData(); data.set('csrf_token', csrf); data.set('source_url', image.url); data.set('source_page_url', uriSource); data.set('alt_text', alt); data.set('attribution', uriSource || image.host); data.set('license', 'Reuse rights confirmed by editor'); data.set('rights_confirmed', '1');
             try {
-                const response = await fetch('/api/import-image', { method: 'POST', body: data, headers: { Accept: 'application/json' } }); const result = await response.json();
+                const response=await fetch('/api/import-image',{method:'POST',body:data,headers:{Accept:'application/json'}});const result=await readJsonResponse(response);
                 if (!response.ok) throw new Error(result.error || 'Image transfer failed.');
                 inserted.push(`[[File:${result.url}|alt=${alt}|${alt}|right|420px]]`);
             } catch (error) { failures++; transferErrors.push(error.message || 'transfer failed'); }

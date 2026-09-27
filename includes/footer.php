@@ -16,7 +16,7 @@ declare(strict_types=1);
         <span>Fast · Accessible · Open knowledge</span>
     </div>
 </footer>
-<script src="/assets/js/app.js?v=7" defer></script>
+<script src="/assets/js/app.js?v=8" defer></script>
 <?php if (!empty($page_scripts) && is_array($page_scripts)): foreach ($page_scripts as $script): ?>
 <script src="<?= e($script) ?>" defer></script>
 <?php endforeach; endif; ?>

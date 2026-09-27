@@ -6,7 +6,7 @@ A modern, dependency-free Wikipedia-style publishing platform for free PHP/MySQL
 
 - Integrated visual and MediaWiki-style source editing with loss-aware round trips, protected source capsules for templates/citations/tables/media, split preview, toolbar, keyboard shortcuts, browser recovery, and server-side private autosave
 - Licensed encyclopedia importer for Wikipedia/MediaWiki and other public HTTPS encyclopedias, preserving raw revision wiki source, references, categories, supported templates, revision provenance, bounded API continuation with explicit incompleteness warnings, visible import labels, and review status
-- Verified reusable-media migration: up to 40 source files per import are checked against file-specific license metadata, re-hosted through ImgBB, rewritten in wiki source, and audited with detected/imported/skipped counts and attribution
+- Verified reusable-media migration: up to 40 source files per import are checked against file-specific license metadata; up to three verified files are re-hosted through ImgBB in the synchronous shared-host request, rewritten in wiki source, and audited with detected/imported/skipped counts, timeout-bound warnings, and attribution
 - Rich-paste image detection: pasting licensed wiki HTML keeps the text and offers to fetch up to ten detected images, re-host them on ImgBB, and store their provenance automatically
 - Safe wiki parser: headings, bold/italic, internal/external links, lists, citations and automatic references, images, categories, tables, infoboxes, notes, warnings, quotes, and hatnotes
 - Revision history, line-by-line diff, rollback, edit summaries, minor edits, conflict detection, and transparent recent changes

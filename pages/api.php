@@ -1,8 +1,27 @@
 <?php
 declare(strict_types=1);
-require_once dirname(__DIR__) . '/config/database.php';
+// Warnings must go to the server log, never into an AJAX JSON body.
+@ini_set('display_errors','0');
+$requestId=bin2hex(random_bytes(6));
+header('X-Request-ID: '.$requestId);
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store');
+ob_start();
+set_exception_handler(static function(Throwable $exception)use($requestId):void{
+    if(ob_get_level()>0)ob_clean();
+    if(!headers_sent()){http_response_code(500);header('Content-Type: application/json; charset=utf-8');header('Cache-Control: no-store');header('X-Request-ID: '.$requestId);}
+    error_log('Uncaught API failure ['.$requestId.']: '.$exception->getMessage());
+    echo json_encode(['error'=>'The server could not complete this request. Please retry or report the request ID.','request_id'=>$requestId],JSON_UNESCAPED_UNICODE);
+});
+register_shutdown_function(static function()use($requestId):void{
+    $last=error_get_last();
+    if(!$last||!in_array((int)$last['type'],[E_ERROR,E_PARSE,E_CORE_ERROR,E_COMPILE_ERROR,E_USER_ERROR,E_RECOVERABLE_ERROR],true))return;
+    if(ob_get_level()>0)ob_clean();
+    if(!headers_sent()){http_response_code(500);header('Content-Type: application/json; charset=utf-8');header('Cache-Control: no-store');header('X-Request-ID: '.$requestId);}
+    error_log('Fatal API failure ['.$requestId.']: '.($last['message']??'unknown'));
+    echo json_encode(['error'=>'The server could not complete this request. Please retry or report the request ID.','request_id'=>$requestId],JSON_UNESCAPED_UNICODE);
+});
+require_once dirname(__DIR__).'/config/database.php';
 
 $action = (string) ($_GET['action'] ?? '');
 
@@ -55,11 +74,12 @@ if ($action === 'import-article') {
     }
     require_once APP_ROOT . '/includes/ImportService.php';
     try {
-        $result = (new ImportService($pdo))->importArticle((string) ($_POST['source_url'] ?? ''), (string) ($_POST['license'] ?? ''), (int) current_user()['id']);
-        echo json_encode($result, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-    } catch (EncyclopediaImportException $exception) {
-        http_response_code(422);
-        echo json_encode(['error' => $exception->getMessage()], JSON_UNESCAPED_UNICODE);
+        $result=(new ImportService($pdo))->importArticle((string)($_POST['source_url']??''),(string)($_POST['license']??''),(int)current_user()['id']);
+        echo json_encode($result,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE|JSON_THROW_ON_ERROR);
+    } catch(EncyclopediaImportException $exception){
+        http_response_code(422);echo json_encode(['error'=>$exception->getMessage()],JSON_UNESCAPED_UNICODE|JSON_INVALID_UTF8_SUBSTITUTE);
+    } catch(Throwable $exception){
+        error_log('Article import API failure ['.$requestId.']: '.$exception->getMessage());http_response_code(500);echo json_encode(['error'=>'The import service encountered a server error. Please retry with a standard Wikipedia article URL. Request ID: '.$requestId.'.','request_id'=>$requestId],JSON_UNESCAPED_UNICODE);
     }
     exit;
 }
